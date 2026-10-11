@@ -1,0 +1,16 @@
+{
+  "name": "ssakda-clean-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "싹다클린 숨고 문의 AI 비서 (승인형)",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "playwright-core": "^1.64.0"
+  }
+}
