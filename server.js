@@ -1,24 +1,27 @@
 // 싹다클린 숨고 문의 AI 비서 서버.
-// 숨고에는 접속하지 않는다. 사장님이 올린 캡처·사진을 분석해 답변 초안과 예상 견적을 만든다.
+// 사장님이 올린 캡처·사진이나 숨고에서 가져온 요청서를 분석해 답변 초안과 예상 견적을 만든다.
+// 숨고 확인과 답변 자동 발송은 설정에서 켠 경우에만 한다.
 import http from 'node:http';
 import { readFile, writeFile, mkdir, unlink } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 import * as store from './lib/store.js';
 import { analyze } from './lib/ai.js';
 import * as kakao from './lib/kakao.js';
 import * as soomgo from './lib/soomgo.js';
-import { calc, defaultInputs, rangeText } from './public/pricing.js';
+import * as kakaotalk from './lib/kakaotalk.js';
+import { calc, defaultInputs, rangeText, customerPrice, won } from './public/pricing.js';
 
-const ROOT = decodeURIComponent(path.dirname(new URL(import.meta.url).pathname));
+const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const ENV_FILE = path.join(ROOT, '.env');
 
 if (!existsSync(ENV_FILE)) {
-  const pin = String(randomInt(100000, 1000000));
+  const pin = String(randomInt(10000000, 100000000));
   await writeFile(
     ENV_FILE,
     `# 접속 비밀번호(숫자). 바꾸려면 숫자를 고치고 프로그램을 다시 시작하세요.\nACCESS_PIN=${pin}\nSESSION_SECRET=${randomBytes(24).toString('hex')}\nPORT=3210\n\n# 밖에서 접속하는 주소 (예: http://노트북의-tailscale-주소:3210). 카톡 알림의 링크에 쓰입니다.\nBASE_URL=\n\n# 카카오톡 알림 (README 참고)\nKAKAO_REST_KEY=\nKAKAO_CLIENT_SECRET=\n`,
@@ -57,11 +60,17 @@ async function runAnalysis(id) {
     inq.status = 'awaiting_owner';
     inq.error = null;
     inq.log.push({ at: new Date().toISOString(), action: 'AI 분석 완료' });
+    if (inq.soomgoId && !inq.autoSend) {
+      const range = ready ? est.table || est.cost : null;
+      if (settings.quoteMode === 'send') await autoSend(inq, analysis, range);
+      else if (settings.quoteMode === 'fill') await autoFill(inq, analysis, range);
+    }
     await store.save(inq);
 
     const risk = { low: '일반', review: '확인 필요', high: '사장님 검토 필수' }[analysis.risk_level];
     const price = ready ? `\n단가표 ${rangeText(est.table)}\n원가기준 ${rangeText(est.cost)}` : '\n견적: 현장 확인 필요';
-    await kakao.notify(`[싹다클린] ${inq.title}\n${risk}${price}`, `/#/i/${id}`);
+    const auto = inq.autoSend ? `\n${inq.autoSend.sent ? '숨고에 자동 발송함' : inq.autoSend.prepared ? inq.autoSend.reason : `자동 발송 안 함: ${inq.autoSend.reason}`}` : '';
+    await kakao.notify(`[싹다클린] ${inq.title}\n${risk}${price}${auto}`, `/#/i/${id}`);
   } catch (e) {
     inq = await store.load(id);
     inq.status = 'error';
@@ -70,6 +79,52 @@ async function runAnalysis(id) {
     await store.save(inq);
     await kakao.notify(`[싹다클린] 분석 실패: ${inq.title}\n${e.message}`, `/#/i/${id}`);
   }
+}
+
+// 사장님 확인 없이 숨고에 견적을 보낸다(숨고캐시 차감). 한 문의에 한 번만 시도하고, 보내지 않았으면 그 사유를 남긴다.
+// 금액은 단가표 기준(없으면 원가 기준)의 최소 금액을 넣고, 답변 글에는 범위를 적는다.
+async function autoSend(inq, analysis, range) {
+  const at = new Date().toISOString();
+  const skip = (reason) => {
+    inq.autoSend = { sent: false, reason, at };
+    inq.log.push({ at, action: '자동 발송 안 함', detail: reason });
+  };
+  if (analysis.job_category === 'other') return skip('싹다클린 업무가 아닌 요청입니다.');
+  if (!range) return skip('금액을 계산할 정보가 부족합니다. 내용을 확인한 뒤 직접 보내주세요.');
+  const reply = analysis.reply_with_estimate.replaceAll('{{견적}}', customerPrice(range)).trim();
+  try {
+    await soomgo.sendQuote(inq.soomgoId, { price: range.min, message: reply });
+  } catch (e) {
+    console.error(`[자동 발송 실패] ${inq.id}: ${e.message.split('\n')[0]}`);
+    return skip(`보내지 못했습니다. ${e.message.split('\n')[0]}`);
+  }
+  inq.autoSend = { sent: true, price: range.min, at };
+  inq.finalReply = inq.draftReply = reply;
+  inq.finalPrice = customerPrice(range);
+  inq.messages.push({ at, from: 'owner', text: reply, images: [] });
+  inq.status = 'sent';
+  inq.log.push({ at, action: '숨고에 자동 발송', detail: `견적 금액 ${won(range.min)}` });
+}
+
+// 숨고 창에 답변과 금액(계산됐으면)을 써 두고 멈춘다. 돈이 나가는 '견적 보내기'는 사장님이 숨고 창에서 직접 누른다.
+async function autoFill(inq, analysis, range) {
+  const at = new Date().toISOString();
+  const reply = (range ? analysis.reply_with_estimate.replaceAll('{{견적}}', customerPrice(range)) : analysis.reply_need_info).trim();
+  try {
+    await soomgo.prepareQuote(inq.soomgoId, { price: range?.min ?? null, message: reply });
+  } catch (e) {
+    const reason = `숨고 창에 써 두지 못했습니다. ${e.message.split('\n')[0]}`;
+    console.error(`[발송 준비 실패] ${inq.id}: ${reason}`);
+    inq.autoSend = { sent: false, reason, at };
+    inq.log.push({ at, action: '발송 준비 실패', detail: reason });
+    return;
+  }
+  const reason = range
+    ? '숨고 창에 답변과 금액을 써 두었습니다. 확인하고 "견적 보내기"를 눌러주세요.'
+    : '숨고 창에 답변을 써 두었습니다. 금액을 넣고 "견적 보내기"를 눌러주세요.';
+  inq.autoSend = { sent: false, prepared: true, reason, at };
+  inq.draftReply = reply;
+  inq.log.push({ at, action: '숨고 창에 발송 직전까지 준비', detail: range ? `견적 금액 ${won(range.min)}` : '금액 미정' });
 }
 
 async function createInquiry({ text, images, soomgoId = null }) {
@@ -205,7 +260,7 @@ async function handle(req, res) {
 
   if (method === 'GET' && p === '/api/inquiries') {
     const all = await store.list();
-    return send(res, 200, all.map((i) => ({ id: i.id, title: i.title, status: i.status, updatedAt: i.updatedAt, risk: i.analysis?.risk_level || null, region: i.analysis?.region || null })));
+    return send(res, 200, all.map((i) => ({ id: i.id, title: i.title, status: i.status, updatedAt: i.updatedAt, risk: i.analysis?.risk_level || null, region: i.analysis?.region || null, autoSend: i.autoSend || null })));
   }
 
   if (method === 'POST' && p === '/api/inquiries') {
@@ -311,6 +366,12 @@ try {
 } catch {
   settings = { tunnel: process.env.TUNNEL === '1', soomgo: process.env.SOOMGO_WATCH === '1' };
 }
+// 숨고 답변 보내는 방식: off(승인 후 직접 복사), fill(숨고 창에 써 두고 멈춤), send(확인 없이 발송)
+if (!['off', 'fill', 'send'].includes(settings.quoteMode)) settings.quoteMode = settings.autoSend ? 'send' : 'off';
+delete settings.autoSend;
+// 카카오톡 채팅방 지켜보기: 방 이름, 찾을 말, 보낼 글
+settings.kakaoWatch = Boolean(settings.kakaoWatch);
+settings.talk = { room: '', keyword: '[방문견적]', message: '안녕하세요, 방문견적 가능합니다.', ...settings.talk };
 const tunnel = { child: null, url: null, wanted: false };
 
 // Cloudflare 임시 터널로 외부 접속용 https 주소를 만든다. 주소는 켤 때마다 바뀐다.
@@ -353,7 +414,7 @@ function startSoomgo() {
 
 async function applySettings(next) {
   if (typeof next.tunnel === 'boolean' && next.tunnel !== settings.tunnel) {
-    if (next.tunnel && PIN.length < 10) throw Object.assign(new Error('밖에서 접속하려면 접속 비밀번호가 10자리 이상이어야 합니다.'), { status: 400 });
+    if (next.tunnel && PIN.length < 8) throw Object.assign(new Error('밖에서 접속하려면 접속 비밀번호가 8자리 이상이어야 합니다.'), { status: 400 });
     settings.tunnel = next.tunnel;
     next.tunnel ? startTunnel() : stopTunnel();
   }
@@ -361,10 +422,30 @@ async function applySettings(next) {
     settings.soomgo = next.soomgo;
     next.soomgo ? startSoomgo() : await soomgo.stopWatcher();
   }
+  if (['off', 'fill', 'send'].includes(next.quoteMode)) settings.quoteMode = next.quoteMode;
+  let talkChanged = false;
+  if (next.talk && typeof next.talk === 'object') {
+    for (const k of ['room', 'keyword', 'message']) {
+      if (typeof next.talk[k] === 'string') settings.talk[k] = next.talk[k].trim().slice(0, 300);
+    }
+    talkChanged = true;
+  }
+  if (typeof next.kakaoWatch === 'boolean' && next.kakaoWatch !== settings.kakaoWatch) {
+    settings.kakaoWatch = next.kakaoWatch;
+    talkChanged = true;
+  }
+  if (talkChanged) settings.kakaoWatch ? kakaotalk.start(settings.talk) : kakaotalk.stop();
   await writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
 
-const featureState = () => ({ settings, tunnelUrl: tunnel.url, soomgo: soomgo.status });
+// 지금 돌고 있는 버전(마지막으로 받은 변경). 업데이트가 적용됐는지 설정 화면에서 확인하는 데 쓴다.
+let version = '';
+try {
+  version = execFileSync('git', ['log', '-1', '--format=%h · %cd', '--date=format:%m-%d %H:%M'], { cwd: ROOT, encoding: 'utf8' }).trim();
+} catch {
+  // git이 없거나 내려받은 폴더가 아니면 표시하지 않는다
+}
+const featureState = () => ({ settings, version, tunnelUrl: tunnel.url, soomgo: soomgo.status, talk: kakaotalk.status });
 
 const PID_FILE = path.join(store.DATA_DIR, 'server.pid');
 let closing = false;
@@ -373,6 +454,7 @@ async function shutdown() {
   closing = true;
   console.log('싹다클린 AI 비서를 끕니다.');
   stopTunnel();
+  kakaotalk.stop();
   await soomgo.stopWatcher().catch(() => {});
   await unlink(PID_FILE).catch(() => {});
   process.exit(0);
@@ -392,6 +474,7 @@ server.listen(PORT, '0.0.0.0', async () => {
   console.log(`  이 노트북:  http://localhost:${PORT}`);
   for (const ip of ips) console.log(`  휴대폰:    http://${ip}:${PORT}`);
   console.log(`  접속 비밀번호: ${PIN}`);
-  if (settings.tunnel && PIN.length >= 10) startTunnel();
+  if (settings.tunnel && PIN.length >= 8) startTunnel();
   if (settings.soomgo) startSoomgo();
+  if (settings.kakaoWatch) kakaotalk.start(settings.talk);
 });

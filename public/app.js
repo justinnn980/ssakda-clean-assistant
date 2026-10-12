@@ -1,4 +1,4 @@
-import { calc, won, rangeText } from '/pricing.js';
+import { calc, won, rangeText, customerPrice } from '/pricing.js';
 
 const app = document.getElementById('app');
 const toastEl = document.getElementById('toast');
@@ -60,9 +60,6 @@ async function shrink(file) {
 }
 const readImages = (input) => Promise.all([...input.files].map(shrink));
 
-const manText = (n) => (n % 10000 === 0 ? `${(n / 10000).toLocaleString('ko-KR')}만` : n.toLocaleString('ko-KR'));
-const customerPrice = (r) => (r.min === r.max ? `${manText(r.min)} 원` : `${manText(r.min)}~${manText(r.max)} 원`);
-
 // ---------- 로그인 ----------
 function renderLogin() {
   clearInterval(pollTimer);
@@ -79,10 +76,28 @@ function renderLogin() {
     }
   };
   document.getElementById('go').onclick = go;
-  document.getElementById('pin').onkeydown = (e) => e.key === 'Enter' && go();
+  // false를 돌려주면 키 입력이 취소되어 키보드로 숫자가 들어가지 않는다
+  document.getElementById('pin').onkeydown = (e) => {
+    if (e.key === 'Enter') go();
+  };
 }
 
 // ---------- 목록 ----------
+// 숨고 자동 확인이 잘 되고 있을 때, 마지막으로 언제 확인했고 새 문의가 없으면 왜 없는지 알려준다
+function soomgoOkText(sg) {
+  if (!sg.lastCheck) return '<span class="dot wait"></span>숨고 확인을 시작하는 중입니다.';
+  if (Date.now() - new Date(sg.lastCheck) > 8 * 60 * 1000)
+    return `<span class="dot bad"></span><span class="err">숨고 확인이 ${when(sg.lastCheck)} 이후 멈춰 있습니다. 노트북이 켜져 있는지, 숨고 크롬 창이 열려 있는지 확인해 주세요.</span>`;
+  const gotNew = sg.lastNew && sg.lastNew >= sg.lastCheck;
+  const result = gotNew
+    ? '새 요청을 등록했습니다.'
+    : `${esc(sg.message)}${sg.message.includes('건 확인') ? ' · 모두 이미 등록한 요청이라 새로 등록할 것이 없습니다.' : ''}`;
+  return `<span class="dot on"></span>숨고 자동 확인 · 마지막 확인 ${when(sg.lastCheck)}<br>${result}${!gotNew && sg.lastNew ? ` 마지막 새 요청 ${when(sg.lastNew)}` : ''}`;
+}
+
+const autoSendText = (a) => (a.sent ? `숨고에 자동 발송함 (${when(a.at)})` : a.prepared ? `발송 직전: ${esc(a.reason)}` : `자동 발송 안 함: ${esc(a.reason)}`);
+const QUOTE_MODE = { off: '직접 보내기 (승인 후 복사)', fill: '발송 직전까지 자동 (숨고 창에 써 두고 멈춤)', send: '자동 발송 (확인 없이 보냄)' };
+
 let listFilter = 'todo';
 async function renderList() {
   const items = await api('/api/inquiries');
@@ -94,12 +109,38 @@ async function renderList() {
     : kakaoState.connected
       ? '<p class="muted">카카오톡 알림 연결됨</p>'
       : '<p><a class="btn small" href="/kakao/login">카카오톡 알림 연결하기</a></p>';
-  const sg = (await api('/api/state')).soomgo;
-  const soomgoNote =
-    sg.state === 'off' || sg.state === 'ok'
-      ? ''
-      : `<a class="card item err" href="#/settings">${sg.state === 'login' ? '숨고 로그인이 필요합니다. 노트북의 크롬 창에서 로그인해 주세요.' : esc(sg.message || '숨고 확인을 시작하는 중입니다.')}</a>`;
-  app.innerHTML = `${soomgoNote}<div class="tabs">${Object.entries(filters)
+  const st = await api('/api/state');
+  const sg = st.soomgo;
+  const on = st.settings.soomgo;
+  // 첫 화면에서 비서를 켜고 끈다. 켜면 노트북에 숨고 창이 열리고, 로그인돼 있으면 바로 확인을 시작한다.
+  const soomgoLine = !on
+    ? '<span class="dot"></span>꺼져 있습니다. 숨고를 확인하지 않고 답변도 보내지 않습니다.'
+    : sg.state === 'ok'
+      ? soomgoOkText(sg)
+      : sg.state === 'login'
+        ? '<span class="dot wait"></span>숨고 로그인이 필요합니다. 노트북에 열린 크롬 창에서 로그인하면 바로 시작합니다.'
+        : sg.state === 'error'
+          ? `<span class="dot bad"></span><span class="err">${esc(sg.message)}</span>`
+          : '<span class="dot wait"></span>숨고 창을 여는 중입니다.';
+  const soomgoNote = `<div class="card"><div class="setting"><div><h2>숨고 비서</h2>
+      <div class="muted">${soomgoLine}</div>
+      ${on ? `<div class="muted">답변: ${QUOTE_MODE[st.settings.quoteMode]}</div>` : ''}</div>
+      <button class="btn ${on ? 'danger' : 'primary'}" id="power">${on ? '끄기' : '켜기'}</button></div></div>`;
+  // 카카오톡 채팅방을 지켜보다가 일감 글이 올라오면 바로 답하는 기능의 켜기·끄기와 최근 기록
+  const tk = st.talk;
+  const talkOn = st.settings.kakaoWatch;
+  const talkLine = !talkOn
+    ? '<span class="dot"></span>꺼져 있습니다. 카카오톡을 건드리지 않습니다.'
+    : tk.state === 'ok'
+      ? `<span class="dot on"></span>${esc(tk.message)} · "${esc(st.settings.talk.keyword)}" 글이 오면 바로 답합니다.`
+      : tk.state === 'error'
+        ? `<span class="dot bad"></span><span class="err">${esc(tk.message)}</span>`
+        : '<span class="dot wait"></span>카카오톡 창을 확인하는 중입니다.';
+  const talkNote = `<div class="card"><div class="setting"><div><h2>카톡 일감 잡기</h2>
+      <div class="muted">${talkLine}</div>
+      ${tk.events.map((ev) => `<div class="muted">${when(ev.at)} · ${esc(ev.text)} → ${ev.sent ? `답장 보냄 (${(ev.ms / 1000).toFixed(1)}초)` : `<span class="err">못 보냄: ${esc(ev.note)}</span>`}</div>`).join('')}</div>
+      <button class="btn ${talkOn ? 'danger' : 'primary'}" id="talkPower">${talkOn ? '끄기' : '켜기'}</button></div></div>`;
+  app.innerHTML = `${soomgoNote}${talkNote}<div class="tabs">${Object.entries(filters)
     .map(([k, v]) => `<button class="tab ${k === listFilter ? 'on' : ''}" data-f="${k}">${v} ${items.filter((i) => match[k].includes(i.status)).length}</button>`)
     .join('')}</div>
     ${shown.length ? '' : '<div class="card muted">해당하는 문의가 없습니다. 오른쪽 위 "새 문의"로 숨고 캡처를 올려주세요.</div>'}
@@ -108,12 +149,33 @@ async function renderList() {
         (i) => `<a class="card item" href="#/i/${i.id}">
         <div class="item-title">${esc(i.title)}</div>
         <div><span class="badge ${i.status === 'error' ? 'error' : 'state'}">${STATUS[i.status]}</span>${i.risk ? `<span class="badge ${i.risk}">${RISK[i.risk]}</span>` : ''}</div>
-        <div class="muted">${esc(i.region || '')} · ${when(i.updatedAt)}</div></a>`,
+        <div class="muted">${esc(i.region || '')} · ${when(i.updatedAt)}</div>
+        ${i.autoSend ? `<div class="muted">${autoSendText(i.autoSend)}</div>` : ''}</a>`,
       )
       .join('')}${kakaoNote}`;
   app.querySelectorAll('.tab').forEach((b) => (b.onclick = () => ((listFilter = b.dataset.f), renderList())));
+  document.getElementById('talkPower').onclick = async (e) => {
+    e.target.disabled = true;
+    try {
+      await api('/api/settings', { kakaoWatch: !talkOn });
+      toast(talkOn ? '카톡 지켜보기를 껐습니다.' : '카톡 지켜보기를 켰습니다.');
+    } catch (err) {
+      toast(err.message);
+    }
+    renderList();
+  };
+  document.getElementById('power').onclick = async (e) => {
+    e.target.disabled = true;
+    try {
+      await api('/api/settings', { soomgo: !on });
+      toast(on ? '비서를 껐습니다.' : '비서를 켰습니다.');
+    } catch (err) {
+      toast(err.message);
+    }
+    renderList();
+  };
   clearInterval(pollTimer);
-  const every = items.some((i) => i.status === 'analyzing') ? 5000 : sg.state === 'off' ? 0 : 60000;
+  const every = items.some((i) => i.status === 'analyzing') || talkOn ? 5000 : !on ? 0 : sg.state === 'ok' ? 60000 : 5000;
   if (every) pollTimer = setInterval(() => location.hash.length <= 2 && renderList(), every);
 }
 
@@ -183,6 +245,7 @@ async function renderDetail(id) {
   <div class="card">
     <h2>${esc(inq.title)}</h2>
     <div><span class="badge state">${STATUS[inq.status]}</span><span class="badge ${a.risk_level}">${RISK[a.risk_level]}</span></div>
+    ${inq.autoSend ? `<p class="${inq.autoSend.sent || inq.autoSend.prepared ? 'muted' : 'err'}">${autoSendText(inq.autoSend)}</p>` : ''}
     ${inq.error ? `<p class="err">최근 재분석 실패: ${esc(inq.error)}</p>` : ''}
     ${a.review_reasons?.length ? `<p class="muted">검토 사유: ${esc(a.review_reasons.join(' / '))}</p>` : ''}
   </div>
@@ -195,7 +258,7 @@ async function renderDetail(id) {
       <button class="btn small" id="useEst">견적 안내 답변</button>
     </p>
     <button class="btn primary block" id="approve">승인하고 복사</button>
-    <p class="muted">복사된 글을 숨고 앱에 붙여넣어 직접 보내주세요. 이 프로그램은 숨고에 접속하지 않습니다.</p>
+    <p class="muted">복사된 글을 숨고 앱에 붙여넣어 직접 보내주세요.</p>
   </div>
 
   <div class="card">
@@ -382,13 +445,20 @@ async function renderSettings() {
 
   app.innerHTML = `
   <div class="card"><span class="dot on"></span><b>프로그램이 켜져 있습니다</b>
-    <p class="muted">노트북이 켜져 있는 동안 계속 동작합니다. 노트북 덮개를 닫으면 멈춥니다.</p></div>
+    <p class="muted">노트북이 켜져 있는 동안 계속 동작합니다. 노트북 덮개를 닫으면 멈춥니다.${st.version ? `<br>버전 ${esc(st.version)}` : ''}</p></div>
 
   <div class="card">
     <div class="setting"><div><h2>숨고 새 요청 자동으로 가져오기</h2>
-      <div class="muted">3분마다 숨고 "받은 요청"을 확인해서 새 요청서를 알아서 등록합니다. 읽기만 하고, 답장은 보내지 않습니다.</div></div>
+      <div class="muted">3분마다 숨고 "받은 요청"을 확인해서 새 요청서를 알아서 등록합니다. 첫 화면의 "켜기·끄기"와 같은 스위치입니다.</div></div>
       ${sw('swSoomgo', st.settings.soomgo)}</div>
     <div class="state-line">${soomgoLine}</div>
+  </div>
+
+  <div class="card">
+    <h2>숨고 답변 보내는 방식</h2>
+    <select id="quoteMode">${Object.entries(QUOTE_MODE).map(([k, v]) => `<option value="${k}" ${k === st.settings.quoteMode ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    <p class="muted">"발송 직전까지 자동"은 숨고에서 가져온 요청의 분석이 끝나면 노트북의 숨고 창에 답변과 금액(계산된 경우)을 써 두고 멈춥니다. 캐시가 나가는 "견적 보내기"는 그 창에서 직접 누릅니다.<br>
+    "자동 발송"은 확인 없이 보내며 보낼 때마다 숨고캐시가 나갑니다. 금액을 계산할 수 없는 문의와 업무가 아닌 요청은 보내지 않습니다.</p>
   </div>
 
   <div class="card">
@@ -396,6 +466,18 @@ async function renderSettings() {
       <div class="muted">집 밖에서 휴대폰으로 볼 수 있는 주소를 만듭니다. 주소와 비밀번호는 다른 사람에게 알려주지 마세요.</div></div>
       ${sw('swTunnel', st.settings.tunnel)}</div>
     <div class="state-line">${tunnelLine}</div>
+  </div>
+
+  <div class="card">
+    <h2>카톡 일감 잡기</h2>
+    <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. 노트북의 카카오톡이 켜져 있어야 합니다.</p>
+    <label>지켜볼 채팅방 이름 (카카오톡에 보이는 그대로)</label>
+    <input id="talkRoom" value="${esc(st.settings.talk.room)}">
+    <label>찾을 말</label>
+    <input id="talkKeyword" value="${esc(st.settings.talk.keyword)}">
+    <label>보낼 글</label>
+    <textarea id="talkMessage">${esc(st.settings.talk.message)}</textarea>
+    <p><button class="btn small" id="talkSave">저장</button></p>
   </div>
 
   <div class="card">
@@ -428,8 +510,27 @@ async function renderSettings() {
   };
   document.getElementById('swSoomgo').onchange = (e) =>
     change('soomgo', e.target, e.target.checked && !local ? '켜면 노트북에 크롬 창이 열립니다. 처음에는 노트북 앞에서 숨고에 로그인해야 합니다. 켤까요?' : '');
+  document.getElementById('quoteMode').onchange = async (e) => {
+    const mode = e.target.value;
+    if (mode === 'send' && !confirm('사장님 확인 없이 숨고에 견적이 발송되고, 보낼 때마다 숨고캐시가 나갑니다. 이 방식으로 바꿀까요?')) return renderSettings();
+    try {
+      await api('/api/settings', { quoteMode: mode });
+      toast('바꿨습니다.');
+    } catch (err) {
+      toast(err.message);
+    }
+    renderSettings();
+  };
   document.getElementById('swTunnel').onchange = (e) =>
     change('tunnel', e.target, !e.target.checked && viaTunnel ? '지금 밖에서 접속 중입니다. 끄면 이 화면이 바로 끊기고, 집에 가서 다시 켜야 합니다. 끌까요?' : '');
+  document.getElementById('talkSave').onclick = async () => {
+    try {
+      await api('/api/settings', { talk: { room: document.getElementById('talkRoom').value, keyword: document.getElementById('talkKeyword').value, message: document.getElementById('talkMessage').value } });
+      toast('저장했습니다.');
+    } catch (err) {
+      toast(err.message);
+    }
+  };
   const copyBtn = document.getElementById('copyUrl');
   if (copyBtn) copyBtn.onclick = async () => toast((await copyText(st.tunnelUrl)) ? '주소를 복사했습니다.' : '복사가 안 됩니다. 주소를 길게 눌러 복사해 주세요.');
   document.getElementById('off').onclick = async () => {

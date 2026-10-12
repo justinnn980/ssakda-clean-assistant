@@ -70,6 +70,10 @@ export function won(n) {
   return Number(n).toLocaleString('ko-KR') + '원';
 }
 
+// 고객에게 보내는 답변에 넣는 금액 표기. 예: 65만~80만 원
+const manText = (n) => (n % 10000 === 0 ? `${(n / 10000).toLocaleString('ko-KR')}만` : n.toLocaleString('ko-KR'));
+export const customerPrice = (r) => (r.min === r.max ? `${manText(r.min)} 원` : `${manText(r.min)}~${manText(r.max)} 원`);
+
 export function rangeText(r) {
   if (!r) return '현장 확인 필요';
   return r.min === r.max ? won(r.min) : `${won(r.min)} ~ ${won(r.max)}`;
