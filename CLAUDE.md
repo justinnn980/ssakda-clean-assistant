@@ -20,7 +20,7 @@
 ## 구조
 
 - `server.js` — HTTP 서버, 분석 대기열, 설정 스위치(외부 접속, 숨고 자동 확인), 종료
-- `lib/ai.js` — Claude Code를 `claude -p`로 호출해 분석 (구독 사용, API 키 없음)
+- `lib/ai.js` — 설정에서 고른 AI로 분석 (구독 사용, API 키 없음). 기본은 Codex CLI(`codex exec`, ChatGPT 구독)이고 Claude Code(`claude -p`)로 바꿀 수 있다. 실제 사용자는 ChatGPT 유료 구독을 쓴다.
 - `lib/soomgo.js` — 숨고 받은 요청 확인과 견적 발송 (playwright-core, 설치된 크롬 사용)
 - `lib/kakao.js` — 카카오톡 나에게 보내기 알림
 - `lib/kakaotalk.js` — 카카오톡 채팅방을 지켜보다가 정해 둔 말(예: [방문견적])이 든 새 글에 바로 답장. 창 조작은 `scripts/kakaotalk-mac.js`(맥 전용, osascript로 실행, '손쉬운 사용' 권한 필요). 윈도우용은 아직 없다. 지금은 시험 버전이라 같은 방에 답하고, 글 올린 사람에게 개인톡을 보내는 부분은 아직 없다.
@@ -32,7 +32,7 @@
 
 ## 실행
 
-`npm install` 후 `./start.sh`. 종료는 `./stop.sh`. 외부 의존 프로그램: Node 22 이상, Claude Code(로그인된 상태), Google Chrome. 밖에서 접속하려면 Tailscale(주소 고정, Funnel 사용) 또는 cloudflared(임시 주소). Tailscale이 설치돼 있으면 Tailscale을 먼저 쓴다.
+`npm install` 후 `./start.sh`. 종료는 `./stop.sh`. 외부 의존 프로그램: Node 22 이상, Codex CLI 또는 Claude Code(로그인된 상태), Google Chrome. 밖에서 접속하는 방법은 세 가지이고 이 순서로 고른다: `.env`에 `TUNNEL_NAME`·`TUNNEL_HOSTNAME`이 있으면 내 도메인(sect.kr)에 연결한 Cloudflare 터널, Tailscale이 설치돼 있으면 Tailscale Funnel, 둘 다 없으면 cloudflared 임시 주소.
 
 ## 배포
 

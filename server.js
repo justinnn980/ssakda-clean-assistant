@@ -11,7 +11,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import * as store from './lib/store.js';
-import { analyze } from './lib/ai.js';
+import { analyze, PROVIDERS } from './lib/ai.js';
 import * as kakao from './lib/kakao.js';
 import * as soomgo from './lib/soomgo.js';
 import * as kakaotalk from './lib/kakaotalk.js';
@@ -49,7 +49,7 @@ function enqueueAnalysis(id) {
 async function runAnalysis(id) {
   let inq = await store.load(id);
   try {
-    const analysis = await analyze(inq, store.inquiryDir(id));
+    const analysis = await analyze(inq, store.inquiryDir(id), settings.ai);
     inq = await store.load(id);
     inq.analysis = analysis;
     inq.title = analysis.title || inq.title;
@@ -370,6 +370,8 @@ try {
 if (!['off', 'fill', 'send'].includes(settings.quoteMode)) settings.quoteMode = settings.autoSend ? 'send' : 'off';
 delete settings.autoSend;
 // 카카오톡 채팅방 지켜보기: 방 이름, 찾을 말, 보낼 글
+// 문의를 분석할 AI: codex(ChatGPT 구독) 또는 claude(Claude 구독)
+if (!(settings.ai in PROVIDERS)) settings.ai = 'codex';
 settings.kakaoWatch = Boolean(settings.kakaoWatch);
 settings.talk = { room: '', keyword: '[방문견적]', message: '안녕하세요, 방문견적 가능합니다.', ...settings.talk };
 const tunnel = { child: null, url: null, wanted: false, note: '' };
@@ -397,21 +399,29 @@ async function publishUrl(url) {
   if (previous.trim() !== url) await kakao.notify(`[싹다클린] 외부 접속 주소가 바뀌었습니다.\n${url}`);
 }
 
-// 외부 접속용 https 주소를 만든다. Tailscale이 있으면 주소가 바뀌지 않는 Tailscale Funnel을 쓰고,
-// 없으면 켤 때마다 주소가 바뀌는 Cloudflare 임시 터널을 쓴다.
+// 외부 접속용 https 주소를 만든다. 아래 순서로 고른다.
+// 1) .env에 TUNNEL_NAME과 TUNNEL_HOSTNAME이 있으면 내 도메인에 연결한 Cloudflare 터널 (주소 고정)
+// 2) Tailscale이 설치돼 있으면 Tailscale Funnel (주소 고정)
+// 3) 둘 다 없으면 켤 때마다 주소가 바뀌는 Cloudflare 임시 터널
 function startTunnel() {
   tunnel.wanted = true;
   if (tunnel.child) return;
-  const ts = tailscaleBin();
-  const child = ts
-    ? spawn(ts, ['funnel', String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] })
-    : spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const { TUNNEL_NAME: named, TUNNEL_HOSTNAME: host } = process.env;
+  const own = Boolean(named && host);
+  const ts = own ? null : tailscaleBin();
+  const local = `http://localhost:${PORT}`;
+  const child = own
+    ? spawn('cloudflared', ['tunnel', '--no-autoupdate', 'run', '--url', local, named], { stdio: ['ignore', 'pipe', 'pipe'] })
+    : ts
+      ? spawn(ts, ['funnel', String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] })
+      : spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', local], { stdio: ['ignore', 'pipe', 'pipe'] });
   tunnel.child = child;
   let lastLine = '';
   const onOutput = (d) => {
     const text = String(d);
     lastLine = text.trim().split('\n').pop() || lastLine;
-    const url = /https:\/\/[a-z0-9.-]+\.(?:ts\.net|trycloudflare\.com)/.exec(text);
+    // 내 도메인 터널은 주소를 이미 알고 있으므로, 연결됐다는 기록이 나오면 그 주소를 쓴다
+    const url = own ? /Registered tunnel connection/.test(text) && [`https://${host}`] : /https:\/\/[a-z0-9.-]+\.(?:ts\.net|trycloudflare\.com)/.exec(text);
     if (url && !tunnel.url) return publishUrl(url[0]).catch((e) => console.error(e));
     // Tailscale이 아직 준비되지 않았으면 무엇을 해야 하는지 설정 화면에 보여준다
     const enable = /https:\/\/login\.tailscale\.com\/\S+/.exec(text);
@@ -421,7 +431,7 @@ function startTunnel() {
   child.stdout.on('data', onOutput);
   child.stderr.on('data', onOutput);
   child.on('error', (e) => {
-    tunnel.note = `외부 접속 프로그램(${ts ? 'Tailscale' : 'cloudflared'})을 실행하지 못했습니다.`;
+    tunnel.note = `외부 접속 프로그램(${ts ? 'Tailscale' : 'cloudflared'})을 실행하지 못했습니다. 설치되어 있는지 확인해 주세요.`;
     console.error('[외부 접속 실패]', e.message);
   });
   child.on('close', () => {
@@ -460,6 +470,7 @@ async function applySettings(next) {
     next.soomgo ? startSoomgo() : await soomgo.stopWatcher();
   }
   if (['off', 'fill', 'send'].includes(next.quoteMode)) settings.quoteMode = next.quoteMode;
+  if (next.ai in PROVIDERS) settings.ai = next.ai;
   let talkChanged = false;
   if (next.talk && typeof next.talk === 'object') {
     for (const k of ['room', 'keyword', 'message']) {

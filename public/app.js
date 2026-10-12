@@ -421,7 +421,7 @@ async function renderSettings() {
   const st = await api('/api/state');
   const sg = st.soomgo;
   const local = ['localhost', '127.0.0.1'].includes(location.hostname);
-  const viaTunnel = /(trycloudflare\.com|\.ts\.net)$/.test(location.hostname);
+  const viaTunnel = Boolean(st.tunnelUrl) && location.origin === st.tunnelUrl;
 
   const soomgoLine = !st.settings.soomgo
     ? '<span class="dot"></span>꺼져 있습니다. 새 요청서는 캡처해서 직접 올립니다.'
@@ -438,7 +438,7 @@ async function renderSettings() {
     : st.tunnelUrl
       ? `<span class="dot on"></span>켜져 있습니다. 밖에서는 아래 주소로 접속하세요.<br><b>${esc(st.tunnelUrl)}</b>
          <p><button class="btn small" id="copyUrl">주소 복사</button></p>
-         <span class="muted">${st.tunnelUrl.endsWith('.ts.net') ? '이 주소는 바뀌지 않습니다.' : '이 주소는 프로그램을 껐다 켜면 바뀝니다. 노트북에 Tailscale을 설치하면 바뀌지 않는 주소를 씁니다.'}</span>`
+         <span class="muted">${st.tunnelUrl.endsWith('trycloudflare.com') ? '이 주소는 프로그램을 껐다 켜면 바뀝니다. 도메인을 연결하거나 Tailscale을 설치하면 바뀌지 않는 주소를 씁니다.' : '이 주소는 바뀌지 않습니다.'}</span>`
       : st.tunnelNote
         ? `<span class="dot bad"></span><span class="err">${esc(st.tunnelNote).replace(/https:\/\/\S+/, (u) => `<a href="${u}" target="_blank">${u}</a>`)}</span>`
         : '<span class="dot wait"></span>주소를 만드는 중입니다. 잠시만 기다려 주세요.';
@@ -454,6 +454,12 @@ async function renderSettings() {
       <div class="muted">3분마다 숨고 "받은 요청"을 확인해서 새 요청서를 알아서 등록합니다. 첫 화면의 "켜기·끄기"와 같은 스위치입니다.</div></div>
       ${sw('swSoomgo', st.settings.soomgo)}</div>
     <div class="state-line">${soomgoLine}</div>
+  </div>
+
+  <div class="card">
+    <h2>문의를 분석할 AI</h2>
+    <select id="aiProvider"><option value="codex" ${st.settings.ai === 'codex' ? 'selected' : ''}>ChatGPT (Codex)</option><option value="claude" ${st.settings.ai === 'claude' ? 'selected' : ''}>Claude</option></select>
+    <p class="muted">고른 쪽의 프로그램이 노트북에 설치되어 있고 유료 구독 계정으로 로그인되어 있어야 합니다. ChatGPT는 Codex, Claude는 Claude Code를 씁니다.</p>
   </div>
 
   <div class="card">
@@ -512,6 +518,15 @@ async function renderSettings() {
   };
   document.getElementById('swSoomgo').onchange = (e) =>
     change('soomgo', e.target, e.target.checked && !local ? '켜면 노트북에 크롬 창이 열립니다. 처음에는 노트북 앞에서 숨고에 로그인해야 합니다. 켤까요?' : '');
+  document.getElementById('aiProvider').onchange = async (e) => {
+    try {
+      await api('/api/settings', { ai: e.target.value });
+      toast('바꿨습니다. 다음 분석부터 적용됩니다.');
+    } catch (err) {
+      toast(err.message);
+    }
+    renderSettings();
+  };
   document.getElementById('quoteMode').onchange = async (e) => {
     const mode = e.target.value;
     if (mode === 'send' && !confirm('사장님 확인 없이 숨고에 견적이 발송되고, 보낼 때마다 숨고캐시가 나갑니다. 이 방식으로 바꿀까요?')) return renderSettings();

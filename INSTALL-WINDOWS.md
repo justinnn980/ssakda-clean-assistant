@@ -18,7 +18,7 @@
 ## 준비물
 
 - 윈도우 10 또는 11 노트북, 인터넷
-- Claude 구독 계정 (AI 분석에 씁니다)
+- ChatGPT 유료 구독 계정 (AI 분석에 씁니다. Claude 구독이 있으면 Claude로도 됩니다)
 - 이 프로그램 저장소를 볼 수 있는 GitHub 계정
 - 숨고 고수 계정
 
@@ -30,22 +30,25 @@
 winget install Git.Git
 winget install OpenJS.NodeJS.LTS
 winget install Google.Chrome
-winget install Tailscale.Tailscale
+winget install Cloudflare.cloudflared
 ```
 
-Tailscale은 밖에서 접속할 때 쓰는 프로그램입니다. 같은 와이파이 안에서만 쓸 거면 설치하지 않아도 됩니다.
+cloudflared는 밖에서 접속할 때 쓰는 프로그램입니다. 같은 와이파이 안에서만 쓸 거면 설치하지 않아도 됩니다.
 
 이미 설치된 프로그램은 "이미 설치되어 있습니다"라고 나오고 넘어갑니다.
 
 **PowerShell 창을 닫고 새로 엽니다.** (새로 설치한 프로그램을 인식시키기 위해서입니다.)
 
-이어서 Claude Code를 설치합니다.
+이어서 AI 프로그램(Codex)을 설치하고 ChatGPT 계정으로 로그인합니다.
 
 ```powershell
-irm https://claude.ai/install.ps1 | iex
+npm install -g @openai/codex
+codex login
 ```
 
-설치가 끝나면 `claude`를 입력해 실행하고, 화면 안내에 따라 Claude 계정으로 로그인합니다. 로그인이 끝나면 `/exit`를 입력해 나옵니다.
+`codex login`을 실행하면 브라우저가 열립니다. ChatGPT 유료 구독 계정으로 로그인합니다. "Logged in"이 나오면 끝입니다.
+
+ChatGPT 대신 Claude 구독을 쓰려면 `irm https://claude.ai/install.ps1 | iex`로 Claude Code를 설치해 `claude`로 로그인하고, 사이트 설정의 "문의를 분석할 AI"를 Claude로 바꿉니다.
 
 ## 2단계. 프로그램 내려받기
 
@@ -89,14 +92,24 @@ powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
 
 **같은 와이파이**: 노트북의 `data\server.log` 파일에 적힌 "휴대폰" 주소(`http://192.168.x.x:3210`)로 접속합니다.
 
-**밖에서 (바뀌지 않는 주소)**: Tailscale을 씁니다. 처음 한 번만 아래를 합니다.
+**밖에서 (바뀌지 않는 주소)**: `sect.kr` 도메인에 연결합니다. 노트북마다 처음 한 번만 아래를 합니다.
 
-1. 시작 메뉴에서 **Tailscale**을 실행하고, 화면 오른쪽 아래 작업 표시줄의 Tailscale 아이콘을 눌러 로그인합니다. 계정이 없으면 Google 계정 등으로 무료로 만듭니다.
-2. 사이트의 설정에서 "밖에서도 접속하기"를 켭니다.
-3. 처음에는 "Tailscale에서 외부 공개(Funnel)를 허용해야 합니다"라는 안내와 주소가 나옵니다. 그 주소를 노트북 브라우저에서 열어 허용합니다.
-4. 잠시 뒤 설정 화면에 `https://노트북이름.xxxx.ts.net` 주소가 나옵니다. 이 주소는 프로그램을 껐다 켜도 바뀌지 않습니다. 휴대폰에는 아무것도 설치하지 않아도 됩니다.
+먼저 sect.kr이 Cloudflare에 등록되어 있어야 합니다(한 번만 하면 되고, 이미 했다면 넘어갑니다). 그다음 PowerShell에서 프로그램 폴더로 가서 아래를 차례로 실행합니다.
 
-Tailscale을 설치하지 않았다면 `winget install Cloudflare.cloudflared`로 cloudflared를 설치해 임시 주소(`https://….trycloudflare.com`)를 쓸 수 있습니다. 이 주소는 프로그램을 껐다 켤 때마다 바뀝니다.
+```powershell
+cloudflared tunnel login
+cloudflared tunnel create ssakda
+cloudflared tunnel route dns ssakda ssakda.sect.kr
+Add-Content .env "`nTUNNEL_NAME=ssakda`nTUNNEL_HOSTNAME=ssakda.sect.kr"
+```
+
+1. 첫 줄을 실행하면 브라우저가 열립니다. Cloudflare에 로그인하고 `sect.kr`을 골라 허용합니다.
+2. 나머지 세 줄을 실행한 뒤 프로그램을 껐다 켭니다.
+3. 사이트의 설정에서 "밖에서도 접속하기"를 켜면 `https://ssakda.sect.kr`로 접속됩니다. 이 주소는 바뀌지 않습니다.
+
+이름 `ssakda`는 노트북마다 달라야 합니다. 두 번째 노트북에는 `ssakda2`처럼 다른 이름과 주소를 씁니다.
+
+**밖에서 (임시 주소)**: 도메인 연결을 하지 않아도 "밖에서도 접속하기"를 켜면 `https://….trycloudflare.com` 주소가 나옵니다. 이 주소는 프로그램을 껐다 켤 때마다 바뀝니다.
 
 ## 비밀번호 바꾸기
 
@@ -130,7 +143,7 @@ Tailscale을 설치하지 않았다면 `winget install Cloudflare.cloudflared`�
 윈도우용을 만들려면:
 
 1. 그 노트북에 PC 카카오톡을 설치하고, 업무방이 있는 계정으로 로그인해 둡니다.
-2. PowerShell에서 프로그램 폴더로 가서 `claude`를 실행합니다.
+2. PowerShell에서 프로그램 폴더로 가서 `codex`(또는 `claude`)를 실행합니다.
 3. "윈도우용 카톡 일감 잡기를 만들어줘"라고 요청합니다. 프로그램 폴더의 `CLAUDE.md`에 지금까지 만든 내용이 적혀 있어서 이어서 작업할 수 있습니다.
 
 ## 문제가 생겼을 때
@@ -139,8 +152,8 @@ Tailscale을 설치하지 않았다면 `winget install Cloudflare.cloudflared`�
 |---|---|
 | 아이콘을 눌렀는데 "켜지지 않았습니다" | 프로그램 폴더의 `data\server-error.log`를 메모장으로 열어 내용을 확인합니다. |
 | "Node.js가 설치되어 있지 않습니다" | 1단계를 다시 하고 PowerShell을 새로 엽니다. |
-| 문의가 "분석 실패 · Claude Code를 실행하지 못했습니다" | PowerShell에서 `claude`를 실행해 로그인돼 있는지 확인합니다. |
-| "밖에서도 접속하기"가 안 켜짐 | 비밀번호가 8자리 이상인지 확인합니다. 설정 화면에 빨간 글씨로 사유가 나오면 그대로 따릅니다(Tailscale 로그인, 외부 공개 허용). |
+| 문의가 "분석 실패 · Codex(ChatGPT)를 실행하지 못했습니다" 또는 로그인 오류 | PowerShell에서 `codex login status`로 로그인돼 있는지 확인하고, 안 돼 있으면 `codex login`을 다시 합니다. |
+| "밖에서도 접속하기"가 안 켜짐 | 비밀번호가 8자리 이상인지 확인합니다. `cloudflared`가 설치됐는지 확인하고, 설정 화면에 빨간 글씨로 사유가 나오면 그 내용을 확인합니다. |
 | 숨고 비서가 "숨고 로그인이 필요합니다" | 노트북에 열린 크롬 창에서 숨고에 다시 로그인합니다. |
 | 휴대폰에서 같은 와이파이 주소로 안 열림 | 윈도우 방화벽에서 Node.js를 허용했는지 확인합니다. |
 | 업데이트가 안 됨 | `data\update.log`를 확인합니다. 노트북에서 파일을 직접 고친 적이 있으면 받아 오지 못합니다. |

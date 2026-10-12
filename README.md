@@ -94,7 +94,7 @@
 
 윈도우 노트북은 [INSTALL-WINDOWS.md](INSTALL-WINDOWS.md)를 따라 합니다. 아래는 맥 기준입니다.
 
-1. Node 22 이상, Google Chrome, Claude Code(로그인), cloudflared를 설치합니다.
+1. Node 22 이상, Google Chrome, Codex CLI 또는 Claude Code(로그인), cloudflared를 설치합니다.
 2. 저장소를 내려받고 `npm install`을 실행합니다.
 3. `./scripts/install-launcher.sh`로 바탕화면 아이콘을 만듭니다.
 4. 처음 켜면 `.env`가 만들어지고 접속 비밀번호가 정해집니다. 문의 기록(`data/`)은 저장소에 포함되지 않습니다.

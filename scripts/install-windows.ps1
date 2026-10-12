@@ -24,7 +24,9 @@ if (Get-Command node -ErrorAction SilentlyContinue) {
   $nodeOk = $major -ge 22
 }
 Check 'Node.js 22 이상' $nodeOk 'winget install OpenJS.NodeJS.LTS'
-Check 'Claude Code' ([bool](Get-Command claude -ErrorAction SilentlyContinue)) 'irm https://claude.ai/install.ps1 | iex'
+# 문의를 분석할 AI 프로그램: Codex(ChatGPT 구독)나 Claude Code(Claude 구독) 중 하나는 있어야 한다
+$hasAi = [bool](Get-Command codex -ErrorAction SilentlyContinue) -or [bool](Get-Command claude -ErrorAction SilentlyContinue)
+Check 'AI 프로그램 (Codex 또는 Claude Code)' $hasAi 'npm install -g @openai/codex'
 # 밖에서 접속: Tailscale이 있으면 바뀌지 않는 주소를 쓰고, 없으면 cloudflared의 임시 주소를 쓴다. 둘 다 없으면 같은 와이파이에서만 접속된다.
 $tailscale = (Test-Path "$env:ProgramFiles\Tailscale\tailscale.exe") -or [bool](Get-Command tailscale -ErrorAction SilentlyContinue)
 Check 'Tailscale (밖에서 접속, 주소 고정)' $tailscale 'winget install Tailscale.Tailscale' $false
