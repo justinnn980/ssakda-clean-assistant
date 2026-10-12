@@ -198,8 +198,8 @@ async function handle(req, res) {
   const method = req.method;
 
   if (method === 'POST' && p === '/api/login') {
-    // 터널을 거치면 접속자 주소가 모두 같게 보이므로 Cloudflare가 알려주는 주소를 쓰고, 전체 실패 횟수도 함께 제한한다
-    const ip = req.headers['cf-connecting-ip'] || req.socket.remoteAddress;
+    // 터널을 거치면 접속자 주소가 모두 같게 보이므로 Cloudflare나 Tailscale이 알려주는 주소를 쓰고, 전체 실패 횟수도 함께 제한한다
+    const ip = req.headers['cf-connecting-ip'] || String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress;
     const now = Date.now();
     const fail = loginFails.get(ip) || { n: 0, until: 0 };
     if (now < fail.until || now < allFails.until) return send(res, 429, { error: '잠시 후 다시 시도해주세요.' });
@@ -372,35 +372,72 @@ delete settings.autoSend;
 // 카카오톡 채팅방 지켜보기: 방 이름, 찾을 말, 보낼 글
 settings.kakaoWatch = Boolean(settings.kakaoWatch);
 settings.talk = { room: '', keyword: '[방문견적]', message: '안녕하세요, 방문견적 가능합니다.', ...settings.talk };
-const tunnel = { child: null, url: null, wanted: false };
+const tunnel = { child: null, url: null, wanted: false, note: '' };
 
-// Cloudflare 임시 터널로 외부 접속용 https 주소를 만든다. 주소는 켤 때마다 바뀐다.
+// Tailscale이 설치돼 있으면 그 실행 파일을 돌려준다. 맥 앱은 실행 경로에 넣어 주지 않아서 앱 안의 것을 직접 찾는다.
+function tailscaleBin() {
+  const known = ['/Applications/Tailscale.app/Contents/MacOS/Tailscale', 'C:\\Program Files\\Tailscale\\tailscale.exe'].find((f) => existsSync(f));
+  if (known) return known;
+  try {
+    execFileSync('tailscale', ['version'], { stdio: 'ignore' });
+    return 'tailscale';
+  } catch {
+    return null;
+  }
+}
+
+async function publishUrl(url) {
+  tunnel.url = url;
+  tunnel.note = '';
+  process.env.BASE_URL = url;
+  const file = path.join(store.DATA_DIR, 'public_url.txt');
+  const previous = await readFile(file, 'utf8').catch(() => '');
+  await writeFile(file, url + '\n');
+  console.log(`  외부 접속:  ${url}`);
+  if (previous.trim() !== url) await kakao.notify(`[싹다클린] 외부 접속 주소가 바뀌었습니다.\n${url}`);
+}
+
+// 외부 접속용 https 주소를 만든다. Tailscale이 있으면 주소가 바뀌지 않는 Tailscale Funnel을 쓰고,
+// 없으면 켤 때마다 주소가 바뀌는 Cloudflare 임시 터널을 쓴다.
 function startTunnel() {
-  if (tunnel.child) return;
   tunnel.wanted = true;
-  const child = spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`], { stdio: ['ignore', 'ignore', 'pipe'] });
+  if (tunnel.child) return;
+  const ts = tailscaleBin();
+  const child = ts
+    ? spawn(ts, ['funnel', String(PORT)], { stdio: ['ignore', 'pipe', 'pipe'] })
+    : spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'] });
   tunnel.child = child;
-  child.stderr.on('data', async (d) => {
-    const m = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/.exec(String(d));
-    if (!m || tunnel.url) return;
-    tunnel.url = m[0];
-    process.env.BASE_URL = m[0];
-    await writeFile(path.join(store.DATA_DIR, 'public_url.txt'), m[0] + '\n');
-    console.log(`  외부 접속:  ${m[0]}`);
-    await kakao.notify(`[싹다클린] 외부 접속 주소가 바뀌었습니다.\n${m[0]}`);
+  let lastLine = '';
+  const onOutput = (d) => {
+    const text = String(d);
+    lastLine = text.trim().split('\n').pop() || lastLine;
+    const url = /https:\/\/[a-z0-9.-]+\.(?:ts\.net|trycloudflare\.com)/.exec(text);
+    if (url && !tunnel.url) return publishUrl(url[0]).catch((e) => console.error(e));
+    // Tailscale이 아직 준비되지 않았으면 무엇을 해야 하는지 설정 화면에 보여준다
+    const enable = /https:\/\/login\.tailscale\.com\/\S+/.exec(text);
+    if (enable) tunnel.note = `Tailscale에서 외부 공개(Funnel)를 허용해야 합니다. 노트북에서 이 주소를 열어 허용해 주세요: ${enable[0]}`;
+    else if (ts && /logged out|not logged in|needslogin|stopped|not running|failed to connect/i.test(text)) tunnel.note = 'Tailscale이 꺼져 있거나 로그인되어 있지 않습니다. 노트북에서 Tailscale을 열어 로그인해 주세요.';
+  };
+  child.stdout.on('data', onOutput);
+  child.stderr.on('data', onOutput);
+  child.on('error', (e) => {
+    tunnel.note = `외부 접속 프로그램(${ts ? 'Tailscale' : 'cloudflared'})을 실행하지 못했습니다.`;
+    console.error('[외부 접속 실패]', e.message);
   });
-  child.on('error', (e) => console.error('[외부 접속 실패] cloudflared를 실행하지 못했습니다:', e.message));
   child.on('close', () => {
+    const hadUrl = Boolean(tunnel.url);
     tunnel.child = null;
     tunnel.url = null;
     if (!tunnel.wanted) return;
-    console.error('[외부 접속 끊김] 10초 뒤 다시 연결합니다.');
+    if (!hadUrl && !tunnel.note) tunnel.note = `외부 접속을 시작하지 못했습니다. ${lastLine}`.trim();
+    console.error(`[외부 접속 끊김] 10초 뒤 다시 연결합니다. ${tunnel.note}`);
     setTimeout(() => tunnel.wanted && startTunnel(), 10000);
   });
 }
 
 function stopTunnel() {
   tunnel.wanted = false;
+  tunnel.note = '';
   tunnel.child?.kill();
 }
 
@@ -445,7 +482,7 @@ try {
 } catch {
   // git이 없거나 내려받은 폴더가 아니면 표시하지 않는다
 }
-const featureState = () => ({ settings, version, tunnelUrl: tunnel.url, soomgo: soomgo.status, talk: kakaotalk.status });
+const featureState = () => ({ settings, version, tunnelUrl: tunnel.url, tunnelNote: tunnel.note, soomgo: soomgo.status, talk: kakaotalk.status });
 
 const PID_FILE = path.join(store.DATA_DIR, 'server.pid');
 let closing = false;

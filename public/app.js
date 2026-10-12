@@ -421,7 +421,7 @@ async function renderSettings() {
   const st = await api('/api/state');
   const sg = st.soomgo;
   const local = ['localhost', '127.0.0.1'].includes(location.hostname);
-  const viaTunnel = location.hostname.endsWith('trycloudflare.com');
+  const viaTunnel = /(trycloudflare\.com|\.ts\.net)$/.test(location.hostname);
 
   const soomgoLine = !st.settings.soomgo
     ? '<span class="dot"></span>꺼져 있습니다. 새 요청서는 캡처해서 직접 올립니다.'
@@ -438,8 +438,10 @@ async function renderSettings() {
     : st.tunnelUrl
       ? `<span class="dot on"></span>켜져 있습니다. 밖에서는 아래 주소로 접속하세요.<br><b>${esc(st.tunnelUrl)}</b>
          <p><button class="btn small" id="copyUrl">주소 복사</button></p>
-         <span class="muted">이 주소는 프로그램을 껐다 켜면 바뀝니다.</span>`
-      : '<span class="dot wait"></span>주소를 만드는 중입니다. 잠시만 기다려 주세요.';
+         <span class="muted">${st.tunnelUrl.endsWith('.ts.net') ? '이 주소는 바뀌지 않습니다.' : '이 주소는 프로그램을 껐다 켜면 바뀝니다. 노트북에 Tailscale을 설치하면 바뀌지 않는 주소를 씁니다.'}</span>`
+      : st.tunnelNote
+        ? `<span class="dot bad"></span><span class="err">${esc(st.tunnelNote).replace(/https:\/\/\S+/, (u) => `<a href="${u}" target="_blank">${u}</a>`)}</span>`
+        : '<span class="dot wait"></span>주소를 만드는 중입니다. 잠시만 기다려 주세요.';
 
   const sw = (id, on) => `<label class="switch" aria-label="켜기 끄기"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><span></span></label>`;
 

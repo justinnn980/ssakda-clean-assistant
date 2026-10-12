@@ -30,8 +30,10 @@
 winget install Git.Git
 winget install OpenJS.NodeJS.LTS
 winget install Google.Chrome
-winget install Cloudflare.cloudflared
+winget install Tailscale.Tailscale
 ```
+
+Tailscale은 밖에서 접속할 때 쓰는 프로그램입니다. 같은 와이파이 안에서만 쓸 거면 설치하지 않아도 됩니다.
 
 이미 설치된 프로그램은 "이미 설치되어 있습니다"라고 나오고 넘어갑니다.
 
@@ -85,8 +87,16 @@ powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
 
 ## 6단계. 휴대폰으로 접속하기
 
-- **같은 와이파이**: 노트북의 `data\server.log` 파일에 적힌 "휴대폰" 주소(`http://192.168.x.x:3210`)로 접속합니다.
-- **밖에서**: 사이트의 설정에서 "밖에서도 접속하기"를 켭니다. 화면에 나오는 `https://….trycloudflare.com` 주소로 접속합니다. 이 주소는 프로그램을 껐다 켤 때마다 바뀝니다.
+**같은 와이파이**: 노트북의 `data\server.log` 파일에 적힌 "휴대폰" 주소(`http://192.168.x.x:3210`)로 접속합니다.
+
+**밖에서 (바뀌지 않는 주소)**: Tailscale을 씁니다. 처음 한 번만 아래를 합니다.
+
+1. 시작 메뉴에서 **Tailscale**을 실행하고, 화면 오른쪽 아래 작업 표시줄의 Tailscale 아이콘을 눌러 로그인합니다. 계정이 없으면 Google 계정 등으로 무료로 만듭니다.
+2. 사이트의 설정에서 "밖에서도 접속하기"를 켭니다.
+3. 처음에는 "Tailscale에서 외부 공개(Funnel)를 허용해야 합니다"라는 안내와 주소가 나옵니다. 그 주소를 노트북 브라우저에서 열어 허용합니다.
+4. 잠시 뒤 설정 화면에 `https://노트북이름.xxxx.ts.net` 주소가 나옵니다. 이 주소는 프로그램을 껐다 켜도 바뀌지 않습니다. 휴대폰에는 아무것도 설치하지 않아도 됩니다.
+
+Tailscale을 설치하지 않았다면 `winget install Cloudflare.cloudflared`로 cloudflared를 설치해 임시 주소(`https://….trycloudflare.com`)를 쓸 수 있습니다. 이 주소는 프로그램을 껐다 켤 때마다 바뀝니다.
 
 ## 비밀번호 바꾸기
 
@@ -130,7 +140,7 @@ powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
 | 아이콘을 눌렀는데 "켜지지 않았습니다" | 프로그램 폴더의 `data\server-error.log`를 메모장으로 열어 내용을 확인합니다. |
 | "Node.js가 설치되어 있지 않습니다" | 1단계를 다시 하고 PowerShell을 새로 엽니다. |
 | 문의가 "분석 실패 · Claude Code를 실행하지 못했습니다" | PowerShell에서 `claude`를 실행해 로그인돼 있는지 확인합니다. |
-| "밖에서도 접속하기"가 안 켜짐 | 비밀번호가 8자리 이상인지, `cloudflared`가 설치됐는지 확인합니다. |
+| "밖에서도 접속하기"가 안 켜짐 | 비밀번호가 8자리 이상인지 확인합니다. 설정 화면에 빨간 글씨로 사유가 나오면 그대로 따릅니다(Tailscale 로그인, 외부 공개 허용). |
 | 숨고 비서가 "숨고 로그인이 필요합니다" | 노트북에 열린 크롬 창에서 숨고에 다시 로그인합니다. |
 | 휴대폰에서 같은 와이파이 주소로 안 열림 | 윈도우 방화벽에서 Node.js를 허용했는지 확인합니다. |
 | 업데이트가 안 됨 | `data\update.log`를 확인합니다. 노트북에서 파일을 직접 고친 적이 있으면 받아 오지 못합니다. |

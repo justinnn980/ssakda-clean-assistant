@@ -32,7 +32,7 @@
 
 ## 실행
 
-`npm install` 후 `./start.sh`. 종료는 `./stop.sh`. 외부 의존 프로그램: Node 22 이상, Claude Code(로그인된 상태), Google Chrome, cloudflared.
+`npm install` 후 `./start.sh`. 종료는 `./stop.sh`. 외부 의존 프로그램: Node 22 이상, Claude Code(로그인된 상태), Google Chrome. 밖에서 접속하려면 Tailscale(주소 고정, Funnel 사용) 또는 cloudflared(임시 주소). Tailscale이 설치돼 있으면 Tailscale을 먼저 쓴다.
 
 ## 배포
 
