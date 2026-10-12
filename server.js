@@ -373,7 +373,7 @@ delete settings.autoSend;
 // 문의를 분석할 AI: codex(ChatGPT 구독) 또는 claude(Claude 구독)
 if (!(settings.ai in PROVIDERS)) settings.ai = 'codex';
 settings.kakaoWatch = Boolean(settings.kakaoWatch);
-settings.talk = { room: '', keyword: '[방문견적]', message: '안녕하세요, 방문견적 가능합니다.', ...settings.talk };
+settings.talk = { room: '', keyword: '[방문견적]', message: '안녕하세요, 방문견적 가능합니다.', target: 'direct', ...settings.talk };
 const tunnel = { child: null, url: null, wanted: false, note: '' };
 
 // Tailscale이 설치돼 있으면 그 실행 파일을 돌려준다. 맥 앱은 실행 경로에 넣어 주지 않아서 앱 안의 것을 직접 찾는다.
@@ -476,6 +476,7 @@ async function applySettings(next) {
     for (const k of ['room', 'keyword', 'message']) {
       if (typeof next.talk[k] === 'string') settings.talk[k] = next.talk[k].trim().slice(0, 300);
     }
+    if (['direct', 'room'].includes(next.talk.target)) settings.talk.target = next.talk.target;
     talkChanged = true;
   }
   if (typeof next.kakaoWatch === 'boolean' && next.kakaoWatch !== settings.kakaoWatch) {

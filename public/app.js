@@ -132,13 +132,13 @@ async function renderList() {
   const talkLine = !talkOn
     ? '<span class="dot"></span>꺼져 있습니다. 카카오톡을 건드리지 않습니다.'
     : tk.state === 'ok'
-      ? `<span class="dot on"></span>${esc(tk.message)} · "${esc(st.settings.talk.keyword)}" 글이 오면 바로 답합니다.`
+      ? `<span class="dot on"></span>${esc(tk.message)} · "${esc(st.settings.talk.keyword)}" 글이 오면 ${st.settings.talk.target === 'direct' ? '올린 사람에게 바로 개인톡을 보냅니다.' : '같은 방에 바로 답합니다.'}`
       : tk.state === 'error'
         ? `<span class="dot bad"></span><span class="err">${esc(tk.message)}</span>`
         : '<span class="dot wait"></span>카카오톡 창을 확인하는 중입니다.';
   const talkNote = `<div class="card"><div class="setting"><div><h2>카톡 일감 잡기</h2>
       <div class="muted">${talkLine}</div>
-      ${tk.events.map((ev) => `<div class="muted">${when(ev.at)} · ${esc(ev.text)} → ${ev.sent ? `답장 보냄 (${(ev.ms / 1000).toFixed(1)}초)` : `<span class="err">못 보냄: ${esc(ev.note)}</span>`}</div>`).join('')}</div>
+      ${tk.events.map((ev) => `<div class="muted">${when(ev.at)} · ${esc(ev.text)} → ${ev.sent ? `${ev.to ? `${esc(ev.to)}님에게 개인톡 보냄` : '같은 방에 답장 보냄'} (${(ev.ms / 1000).toFixed(1)}초)` : `<span class="err">못 보냄: ${esc(ev.note)}</span>`}</div>`).join('')}</div>
       <button class="btn ${talkOn ? 'danger' : 'primary'}" id="talkPower">${talkOn ? '끄기' : '켜기'}</button></div></div>`;
   app.innerHTML = `${soomgoNote}${talkNote}<div class="tabs">${Object.entries(filters)
     .map(([k, v]) => `<button class="tab ${k === listFilter ? 'on' : ''}" data-f="${k}">${v} ${items.filter((i) => match[k].includes(i.status)).length}</button>`)
@@ -478,13 +478,15 @@ async function renderSettings() {
 
   <div class="card">
     <h2>카톡 일감 잡기</h2>
-    <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. 노트북의 카카오톡이 켜져 있어야 합니다.</p>
+    <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. 노트북의 카카오톡이 켜져 있어야 하고, 개인톡을 보내는 3초쯤은 마우스가 저절로 움직입니다. 오픈채팅방에서는 개인톡을 보낼 수 없습니다.</p>
     <label>지켜볼 채팅방 이름 (카카오톡에 보이는 그대로)</label>
     <input id="talkRoom" value="${esc(st.settings.talk.room)}">
     <label>찾을 말</label>
     <input id="talkKeyword" value="${esc(st.settings.talk.keyword)}">
     <label>보낼 글</label>
     <textarea id="talkMessage">${esc(st.settings.talk.message)}</textarea>
+    <label>보낼 곳</label>
+    <select id="talkTarget"><option value="direct" ${st.settings.talk.target === 'direct' ? 'selected' : ''}>글 올린 사람에게 개인톡</option><option value="room" ${st.settings.talk.target === 'room' ? 'selected' : ''}>같은 방에 답하기 (시험용)</option></select>
     <p><button class="btn small" id="talkSave">저장</button></p>
   </div>
 
@@ -542,7 +544,7 @@ async function renderSettings() {
     change('tunnel', e.target, !e.target.checked && viaTunnel ? '지금 밖에서 접속 중입니다. 끄면 이 화면이 바로 끊기고, 집에 가서 다시 켜야 합니다. 끌까요?' : '');
   document.getElementById('talkSave').onclick = async () => {
     try {
-      await api('/api/settings', { talk: { room: document.getElementById('talkRoom').value, keyword: document.getElementById('talkKeyword').value, message: document.getElementById('talkMessage').value } });
+      await api('/api/settings', { talk: { room: document.getElementById('talkRoom').value, keyword: document.getElementById('talkKeyword').value, message: document.getElementById('talkMessage').value, target: document.getElementById('talkTarget').value } });
       toast('저장했습니다.');
     } catch (err) {
       toast(err.message);
