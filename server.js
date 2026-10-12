@@ -252,6 +252,14 @@ async function handle(req, res) {
     return send(res, 200, featureState());
   }
 
+  if (method === 'GET' && p === '/api/talk/rooms') {
+    try {
+      return send(res, 200, { rooms: await kakaotalk.rooms() });
+    } catch (e) {
+      return send(res, 200, { rooms: [], note: e.message });
+    }
+  }
+
   if (method === 'POST' && p === '/api/shutdown') {
     send(res, 200, { ok: true });
     setTimeout(shutdown, 300);

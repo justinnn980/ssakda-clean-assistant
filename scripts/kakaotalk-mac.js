@@ -1,4 +1,5 @@
 // 맥용 카카오톡 창을 읽고 조작한다. node가 아니라 osascript로 실행한다:
+//   osascript -l JavaScript scripts/kakaotalk-mac.js rooms
 //   osascript -l JavaScript scripts/kakaotalk-mac.js peek <방 이름>
 //   osascript -l JavaScript scripts/kakaotalk-mac.js send <방 이름> <보낼 글>
 //   osascript -l JavaScript scripts/kakaotalk-mac.js direct <방 이름> <보낼 글> <일감 글 본문> [dry]
@@ -12,6 +13,7 @@ function run(argv) {
   try {
     const proc = Application('System Events').processes.byName('KakaoTalk');
     if (!proc.exists()) return JSON.stringify({ error: '카카오톡이 켜져 있지 않습니다.' });
+    if (cmd === 'rooms') return JSON.stringify(roomList(proc));
     if (cmd === 'peek') return JSON.stringify(peek(proc, room));
     if (cmd === 'send') return JSON.stringify(send(roomWindow(proc, room), text));
     if (cmd === 'direct') return JSON.stringify(direct(proc, room, text, rowText, flag === 'dry'));
@@ -60,6 +62,33 @@ function roomWindow(proc, room) {
     break;
   }
   throw new Error(`"${room}" 채팅방을 찾지 못했습니다. 카카오톡을 '채팅' 탭으로 두고 방 이름을 확인해 주세요.`);
+}
+
+// 설정 화면에서 방을 고를 수 있게 채팅 목록의 방 이름을 돌려준다. 마지막 글 내용은 읽지 않는다.
+// 창을 일부러 띄우지는 않는다. 채팅 목록이 보이지 않으면 그렇다고 알려준다.
+function roomList(proc) {
+  let rows;
+  try {
+    rows = proc.windows.byName('카카오톡').scrollAreas[0].tables[0].rows();
+  } catch (e) {
+    throw new Error("카카오톡 창을 '채팅' 탭으로 열어 두면 방 목록에서 고를 수 있습니다.");
+  }
+  // 채팅 목록은 한 줄 읽는 데 0.1초쯤 걸려서 최근 40개만 읽고, 오픈채팅 표시는 단체방에서만 확인한다
+  const rooms = [];
+  for (let i = 0; i < Math.min(rows.length, 40); i++) {
+    let texts;
+    try {
+      texts = rows[i].uiElements[0].staticTexts.value();
+    } catch (e) {
+      continue;
+    }
+    const name = texts[0] ? String(texts[0]) : '';
+    if (!name) continue;
+    const members = texts.slice(1).find((t) => /^\d+$/.test(String(t)));
+    const open = Boolean(members) && rows[i].uiElements[0].images.description().some((d) => String(d).includes('openchat'));
+    rooms.push({ name, members: members ? Number(members) : 0, open });
+  }
+  return { rooms };
 }
 
 // 글 한 줄에서 올린 사람 이름을 읽는다. 다른 사람 글에는 프로필 사진이 있고 이름이 그 바로 오른쪽(가장 왼쪽 글자)에 있다.

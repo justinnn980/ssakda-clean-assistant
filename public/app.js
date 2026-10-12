@@ -5,6 +5,7 @@ const toastEl = document.getElementById('toast');
 let config = null;
 let kakaoState = null;
 let pollTimer = null;
+let focusCard = null; // 설정 화면을 열 때 바로 보여줄 칸
 
 const STATUS = { analyzing: '분석 중', awaiting_owner: '승인 대기', sent: '전송 완료', on_hold: '보류', rejected: '거절', booked: '예약 확정', error: '분석 실패' };
 const RISK = { low: '일반', review: '확인 필요', high: '사장님 검토 필수' };
@@ -136,8 +137,13 @@ async function renderList() {
       : tk.state === 'error'
         ? `<span class="dot bad"></span><span class="err">${esc(tk.message)}</span>`
         : '<span class="dot wait"></span>카카오톡 창을 확인하는 중입니다.';
+  const tset = st.settings.talk;
+  const talkSummary = tset.room
+    ? `방 "${esc(tset.room)}" · 찾을 말 "${esc(tset.keyword)}" · ${tset.target === 'direct' ? '올린 사람에게 개인톡' : '같은 방에 답하기'}`
+    : '지켜볼 채팅방이 아직 정해지지 않았습니다.';
   const talkNote = `<div class="card"><div class="setting"><div><h2>카톡 일감 잡기</h2>
       <div class="muted">${talkLine}</div>
+      <div class="muted">${talkSummary} <a href="#/settings" id="talkEdit">바꾸기</a></div>
       ${tk.events.map((ev) => `<div class="muted">${when(ev.at)} · ${esc(ev.text)} → ${ev.sent ? `${ev.to ? `${esc(ev.to)}님에게 개인톡 보냄` : '같은 방에 답장 보냄'} (${(ev.ms / 1000).toFixed(1)}초)` : `<span class="err">못 보냄: ${esc(ev.note)}</span>`}</div>`).join('')}</div>
       <button class="btn ${talkOn ? 'danger' : 'primary'}" id="talkPower">${talkOn ? '끄기' : '켜기'}</button></div></div>`;
   app.innerHTML = `${soomgoNote}${talkNote}<div class="tabs">${Object.entries(filters)
@@ -154,6 +160,7 @@ async function renderList() {
       )
       .join('')}${kakaoNote}`;
   app.querySelectorAll('.tab').forEach((b) => (b.onclick = () => ((listFilter = b.dataset.f), renderList())));
+  document.getElementById('talkEdit').onclick = () => (focusCard = 'talkCard');
   document.getElementById('talkPower').onclick = async (e) => {
     e.target.disabled = true;
     try {
@@ -476,11 +483,13 @@ async function renderSettings() {
     <div class="state-line">${tunnelLine}</div>
   </div>
 
-  <div class="card">
+  <div class="card" id="talkCard">
     <h2>카톡 일감 잡기</h2>
-    <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. 노트북의 카카오톡이 켜져 있어야 하고, 개인톡을 보내는 3초쯤은 마우스가 저절로 움직입니다. 오픈채팅방에서는 개인톡을 보낼 수 없습니다.</p>
-    <label>지켜볼 채팅방 이름 (카카오톡에 보이는 그대로)</label>
-    <input id="talkRoom" value="${esc(st.settings.talk.room)}">
+    <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. 노트북의 카카오톡이 켜져 있어야 하고, 개인톡을 보내는 3초쯤은 마우스가 저절로 움직입니다. 오픈채팅방에서는 개인톡을 보낼 수 없습니다. 저장하면 바로 적용됩니다.</p>
+    <label>지켜볼 채팅방</label>
+    <input id="talkRoom" list="talkRooms" value="${esc(st.settings.talk.room)}" placeholder="카카오톡에 보이는 방 이름 그대로" autocomplete="off">
+    <datalist id="talkRooms"></datalist>
+    <p class="muted" id="talkRoomsNote">카카오톡에서 방 목록을 불러오는 중입니다.</p>
     <label>찾을 말</label>
     <input id="talkKeyword" value="${esc(st.settings.talk.keyword)}">
     <label>보낼 글</label>
@@ -542,6 +551,16 @@ async function renderSettings() {
   };
   document.getElementById('swTunnel').onchange = (e) =>
     change('tunnel', e.target, !e.target.checked && viaTunnel ? '지금 밖에서 접속 중입니다. 끄면 이 화면이 바로 끊기고, 집에 가서 다시 켜야 합니다. 끌까요?' : '');
+  // 방 이름을 직접 치다 틀리지 않게, 이 노트북 카카오톡의 방 목록에서 고를 수 있게 한다
+  api('/api/talk/rooms')
+    .then(({ rooms, note }) => {
+      const list = document.getElementById('talkRooms');
+      const hint = document.getElementById('talkRoomsNote');
+      if (!list || !hint) return;
+      list.innerHTML = rooms.map((r) => `<option value="${esc(r.name)}">${r.open ? '오픈채팅 · ' : ''}${r.members ? `${r.members}명` : '1:1'}</option>`).join('');
+      hint.textContent = rooms.length ? `방 ${rooms.length}개를 불러왔습니다. 위 칸을 비우고 누르면 목록에서 고를 수 있습니다.` : note || '방 목록을 불러오지 못했습니다. 방 이름을 직접 입력해 주세요.';
+    })
+    .catch(() => {});
   document.getElementById('talkSave').onclick = async () => {
     try {
       await api('/api/settings', { talk: { room: document.getElementById('talkRoom').value, keyword: document.getElementById('talkKeyword').value, message: document.getElementById('talkMessage').value, target: document.getElementById('talkTarget').value } });
@@ -573,6 +592,8 @@ async function route() {
     else if (h === '#/settings') await renderSettings();
     else await renderList();
     window.scrollTo(0, 0);
+    if (focusCard) document.getElementById(focusCard)?.scrollIntoView();
+    focusCard = null;
   } catch (e) {
     if (e.message !== '로그인이 필요합니다.') app.innerHTML = `<div class="card err">${esc(e.message)}</div>`;
   }
