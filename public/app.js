@@ -1,19 +1,29 @@
+// 휴대폰·컴퓨터 브라우저에서 돌아가는 화면 코드. 서버(/api/...)에서 자료를 받아 화면을 그린다
+// 금액 계산은 서버와 같은 파일(pricing.js)을 쓴다
 import { calc, won, rangeText, customerPrice } from '/pricing.js';
 
+// 화면 내용을 그려 넣을 자리와, 아래쪽에 잠깐 뜨는 알림 자리
 const app = document.getElementById('app');
 const toastEl = document.getElementById('toast');
+// 서버에서 받은 단가 설정
 let config = null;
+// 카카오톡 알림 연결 상태
 let kakaoState = null;
+// 화면을 주기적으로 새로 고치는 타이머
 let pollTimer = null;
 let focusCard = null; // 설정 화면을 열 때 바로 보여줄 칸
 
+// 서버가 쓰는 영어 값을 화면에 보여줄 한글로 바꾸는 표: 문의 상태, 위험도, 필요 여부
 const STATUS = { analyzing: '분석 중', awaiting_owner: '승인 대기', sent: '전송 완료', on_hold: '보류', rejected: '거절', booked: '예약 확정', error: '분석 실패' };
 const RISK = { low: '일반', review: '확인 필요', high: '사장님 검토 필수' };
 const YN = { yes: '필요', no: '불필요', unknown: '현장 확인 필요' };
 
+// 고객이 쓴 글에 든 < > 같은 기호가 화면 코드로 읽히지 않도록 안전한 글자로 바꾼다
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+// 시각을 "10. 13. 오후 03:30"처럼 짧게 적는다
 const when = (iso) => new Date(iso).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
+// 화면 아래에 알림 글을 2.5초 동안 띄운다
 function toast(msg) {
   toastEl.textContent = msg;
   toastEl.hidden = false;
@@ -21,6 +31,7 @@ function toast(msg) {
   toast.t = setTimeout(() => (toastEl.hidden = true), 2500);
 }
 
+// 서버에 요청을 보낸다. body가 있으면 보내기(POST), 없으면 가져오기(GET). 로그인이 풀렸으면 로그인 화면을 띄우고, 서버가 오류를 알려주면 그 문구를 오류로 넘긴다
 async function api(path, body) {
   const res = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (res.status === 401 && path !== '/api/login') {
@@ -34,10 +45,12 @@ async function api(path, body) {
 
 // https가 아닌 주소(집 와이파이, Tailscale)에서도 복사가 되도록 예비 방법을 둔다
 async function copyText(text) {
+  // 먼저 브라우저의 복사 기능을 써 본다
   try {
     await navigator.clipboard.writeText(text);
     return true;
   } catch {
+    // 안 되면 보이지 않는 글 칸을 만들어 거기에 글을 넣고 선택해서 복사한다
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
@@ -51,6 +64,7 @@ async function copyText(text) {
 
 // 휴대폰 사진은 크기가 커서 올리기 전에 줄인다
 async function shrink(file) {
+  // 긴 쪽이 1800픽셀을 넘으면 그 크기로 줄이고, JPG(품질 85%)로 바꿔 글자 형태로 돌려준다
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, 1800 / Math.max(bitmap.width, bitmap.height));
   const canvas = document.createElement('canvas');
@@ -59,15 +73,19 @@ async function shrink(file) {
   canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
   return canvas.toDataURL('image/jpeg', 0.85);
 }
+// 고른 사진들을 모두 줄여서 돌려준다
 const readImages = (input) => Promise.all([...input.files].map(shrink));
 
 // ---------- 로그인 ----------
+// 접속 비밀번호를 넣는 화면을 그린다
 function renderLogin() {
+  // 다른 화면에서 돌던 새로 고침을 멈춘다
   clearInterval(pollTimer);
   app.innerHTML = `<div class="card"><h2>접속 비밀번호</h2>
     <p class="muted">노트북에서 프로그램을 켤 때 화면에 표시된 숫자입니다.</p>
     <input id="pin" type="password" inputmode="numeric" autocomplete="current-password">
     <p><button class="btn primary block" id="go">들어가기</button></p></div>`;
+  // 비밀번호를 서버에 보내고, 맞으면 처음부터 다시 시작한다. 틀리면 알림을 띄운다
   const go = async () => {
     try {
       await api('/api/login', { pin: document.getElementById('pin').value });
@@ -76,6 +94,7 @@ function renderLogin() {
       toast(e.message);
     }
   };
+  // 버튼을 누르거나 Enter를 치면 들어간다
   document.getElementById('go').onclick = go;
   // false를 돌려주면 키 입력이 취소되어 키보드로 숫자가 들어가지 않는다
   document.getElementById('pin').onkeydown = (e) => {
@@ -86,9 +105,12 @@ function renderLogin() {
 // ---------- 목록 ----------
 // 숨고 자동 확인이 잘 되고 있을 때, 마지막으로 언제 확인했고 새 문의가 없으면 왜 없는지 알려준다
 function soomgoOkText(sg) {
+  // 아직 한 번도 확인하지 않았을 때
   if (!sg.lastCheck) return '<span class="dot wait"></span>숨고 확인을 시작하는 중입니다.';
+  // 마지막 확인이 8분 넘게 지났으면 멈춘 것으로 보고 알린다
   if (Date.now() - new Date(sg.lastCheck) > 8 * 60 * 1000)
     return `<span class="dot bad"></span><span class="err">숨고 확인이 ${when(sg.lastCheck)} 이후 멈춰 있습니다. 노트북이 켜져 있는지, 숨고 크롬 창이 열려 있는지 확인해 주세요.</span>`;
+  // 방금 확인에서 새 요청을 등록했는지에 따라 문구를 고른다
   const gotNew = sg.lastNew && sg.lastNew >= sg.lastCheck;
   const result = gotNew
     ? '새 요청을 등록했습니다.'
@@ -96,20 +118,29 @@ function soomgoOkText(sg) {
   return `<span class="dot on"></span>숨고 자동 확인 · 마지막 확인 ${when(sg.lastCheck)}<br>${result}${!gotNew && sg.lastNew ? ` 마지막 새 요청 ${when(sg.lastNew)}` : ''}`;
 }
 
+// 자동 발송 결과를 한 줄로 적는다: 보냈음 / 발송 직전까지 준비 / 보내지 않은 사유
 const autoSendText = (a) => (a.sent ? `숨고에 자동 발송함 (${when(a.at)})` : a.prepared ? `발송 직전: ${esc(a.reason)}` : `자동 발송 안 함: ${esc(a.reason)}`);
+// 숨고 답변 보내는 방식의 화면 이름
 const QUOTE_MODE = { off: '직접 보내기 (승인 후 복사)', fill: '발송 직전까지 자동 (숨고 창에 써 두고 멈춤)', send: '자동 발송 (확인 없이 보냄)' };
 
+// 지금 고른 탭. 처음에는 '처리할 문의'
 let listFilter = 'todo';
+// 첫 화면(문의 목록)을 그린다
 async function renderList() {
+  // 서버에서 문의 목록을 받는다
   const items = await api('/api/inquiries');
+  // 탭 이름과, 탭마다 보여줄 문의 상태
   const filters = { todo: '처리할 문의', sent: '전송 완료', booked: '예약', etc: '보류·거절' };
   const match = { todo: ['analyzing', 'awaiting_owner', 'error'], sent: ['sent'], booked: ['booked'], etc: ['on_hold', 'rejected'] };
+  // 고른 탭에 해당하는 문의만 남긴다
   const shown = items.filter((i) => match[listFilter].includes(i.status));
+  // 카카오톡 알림 안내: 준비가 안 됐으면 숨기고, 연결됐으면 '연결됨', 아니면 연결 버튼
   const kakaoNote = !kakaoState.configured
     ? ''
     : kakaoState.connected
       ? '<p class="muted">카카오톡 알림 연결됨</p>'
       : '<p><a class="btn small" href="/kakao/login">카카오톡 알림 연결하기</a></p>';
+  // 스위치 상태와 숨고·카톡의 지금 상태를 받는다
   const st = await api('/api/state');
   const sg = st.soomgo;
   const on = st.settings.soomgo;
@@ -123,6 +154,7 @@ async function renderList() {
         : sg.state === 'error'
           ? `<span class="dot bad"></span><span class="err">${esc(sg.message)}</span>`
           : '<span class="dot wait"></span>숨고 창을 여는 중입니다.';
+  // 숨고 비서 칸: 상태 한 줄, 답변 보내는 방식, 켜기·끄기 버튼
   const soomgoNote = `<div class="card"><div class="setting"><div><h2>숨고 비서</h2>
       <div class="muted">${soomgoLine}</div>
       ${on ? `<div class="muted">답변: ${QUOTE_MODE[st.settings.quoteMode]}</div>` : ''}</div>
@@ -137,15 +169,18 @@ async function renderList() {
       : tk.state === 'error'
         ? `<span class="dot bad"></span><span class="err">${esc(tk.message)}</span>`
         : '<span class="dot wait"></span>카카오톡 창을 확인하는 중입니다.';
+  // 지금 설정을 한 줄로 요약한다
   const tset = st.settings.talk;
   const talkSummary = tset.room
     ? `방 "${esc(tset.room)}" · 찾을 말 "${esc(tset.keyword)}" · ${tset.target === 'direct' ? '올린 사람에게 개인톡' : '같은 방에 답하기'}`
     : '지켜볼 채팅방이 아직 정해지지 않았습니다.';
+  // 카톡 일감 잡기 칸: 상태, 설정 요약, 최근에 반응한 기록, 켜기·끄기 버튼
   const talkNote = `<div class="card"><div class="setting"><div><h2>카톡 일감 잡기</h2>
       <div class="muted">${talkLine}</div>
       <div class="muted">${talkSummary} <a href="#/settings" id="talkEdit">바꾸기</a></div>
       ${tk.events.map((ev) => `<div class="muted">${when(ev.at)} · ${esc(ev.text)} → ${ev.sent ? `${ev.to ? `${esc(ev.to)}님에게 개인톡 보냄` : '같은 방에 답장 보냄'} (${(ev.ms / 1000).toFixed(1)}초)` : `<span class="err">못 보냄: ${esc(ev.note)}</span>`}</div>`).join('')}</div>
       <button class="btn ${talkOn ? 'danger' : 'primary'}" id="talkPower">${talkOn ? '끄기' : '켜기'}</button></div></div>`;
+  // 화면에 그린다: 숨고 칸, 카톡 칸, 탭(탭마다 문의 수), 문의 카드들(제목·상태·위험도·지역·시각), 카카오 알림 안내
   app.innerHTML = `${soomgoNote}${talkNote}<div class="tabs">${Object.entries(filters)
     .map(([k, v]) => `<button class="tab ${k === listFilter ? 'on' : ''}" data-f="${k}">${v} ${items.filter((i) => match[k].includes(i.status)).length}</button>`)
     .join('')}</div>
@@ -159,8 +194,11 @@ async function renderList() {
         ${i.autoSend ? `<div class="muted">${autoSendText(i.autoSend)}</div>` : ''}</a>`,
       )
       .join('')}${kakaoNote}`;
+  // 탭을 누르면 그 탭으로 바꿔 다시 그린다
   app.querySelectorAll('.tab').forEach((b) => (b.onclick = () => ((listFilter = b.dataset.f), renderList())));
+  // '바꾸기'를 누르면 설정 화면의 카톡 칸으로 바로 가게 표시해 둔다
   document.getElementById('talkEdit').onclick = () => (focusCard = 'talkCard');
+  // 카톡 일감 잡기 켜기·끄기 버튼
   document.getElementById('talkPower').onclick = async (e) => {
     e.target.disabled = true;
     try {
@@ -171,6 +209,7 @@ async function renderList() {
     }
     renderList();
   };
+  // 숨고 비서 켜기·끄기 버튼
   document.getElementById('power').onclick = async (e) => {
     e.target.disabled = true;
     try {
@@ -181,12 +220,15 @@ async function renderList() {
     }
     renderList();
   };
+  // 얼마나 자주 새로 고칠지 정한다: 분석 중인 문의가 있거나 카톡을 지켜보는 중이면 5초, 숨고가 잘 돌고 있으면 1분, 숨고를 여는 중이면 5초, 다 꺼져 있으면 새로 고치지 않는다
   clearInterval(pollTimer);
   const every = items.some((i) => i.status === 'analyzing') || talkOn ? 5000 : !on ? 0 : sg.state === 'ok' ? 60000 : 5000;
+  // 첫 화면에 머물러 있을 때만 새로 고친다
   if (every) pollTimer = setInterval(() => location.hash.length <= 2 && renderList(), every);
 }
 
 // ---------- 새 문의 ----------
+// 새 문의를 올리는 화면을 그린다
 function renderNew() {
   clearInterval(pollTimer);
   app.innerHTML = `<div class="card"><h2>새 문의 등록</h2>
@@ -197,6 +239,7 @@ function renderNew() {
     <textarea id="text" placeholder="캡처만 올려도 됩니다. 고객이 채팅으로 보낸 글이 있으면 붙여넣으세요."></textarea>
     <p class="muted">고객 전화번호나 상세 주소는 넣지 않아도 됩니다.</p>
     <button class="btn primary block" id="submit">AI 분석 시작</button></div>`;
+  // 'AI 분석 시작'을 누르면 버튼을 잠그고, 사진을 줄여서 서버에 올린 뒤, 그 문의 화면으로 간다. 실패하면 버튼을 되돌린다
   document.getElementById('submit').onclick = async (e) => {
     e.target.disabled = true;
     e.target.textContent = '올리는 중…';
@@ -215,9 +258,11 @@ function renderNew() {
 // ---------- 문의 상세 (승인 화면) ----------
 async function renderDetail(id) {
   clearInterval(pollTimer);
+  // 서버에서 이 문의의 전체 내용을 받는다. a는 AI 분석 결과(아직 없을 수 있다)
   const inq = await api(`/api/inquiries/${id}`);
   const a = inq.analysis;
 
+  // 문의·대화 기록 칸: 누가 언제 쓴 글인지와 사진들. 분석 결과가 없으면 펼쳐서 보여준다
   const thread = `<details class="card" ${a ? '' : 'open'}><summary>문의·대화 기록 (${inq.messages.length})</summary><p></p>
     ${inq.messages
       .map(
@@ -226,6 +271,7 @@ async function renderDetail(id) {
       )
       .join('')}</details>`;
 
+  // 분석 중이면 돌아가는 표시를 보여주고, 3초마다 끝났는지 확인해 끝나면 다시 그린다
   if (inq.status === 'analyzing') {
     app.innerHTML = `<div class="card"><h2>${esc(inq.title)}</h2><div class="spinner"></div><p class="muted" style="text-align:center">AI가 분석하고 있습니다. 보통 1분 안에 끝납니다.</p></div>${thread}`;
     pollTimer = setInterval(async () => {
@@ -235,6 +281,7 @@ async function renderDetail(id) {
     return;
   }
 
+  // 분석 결과가 없으면(분석 실패) 사유와 '다시 분석' 버튼을 보여준다
   if (!a) {
     app.innerHTML = `<div class="card"><h2>${esc(inq.title)}</h2><p class="err">분석에 실패했습니다: ${esc(inq.error)}</p>
       <button class="btn primary block" id="retry">다시 분석</button></div>${thread}`;
@@ -242,12 +289,17 @@ async function renderDetail(id) {
     return;
   }
 
+  // 금액 계산에 넣을 값들(화면에서 고칠 수 있게 복사해 둔다)과 고른 금액
   const inputs = { ...inq.estimateInputs };
   let chosenPrice = inq.finalPrice;
+  // 숫자를 넣는 칸 하나를 만드는 작은 함수. 값이 없으면 '미정'으로 보인다
   const field = (key, label, step = 1) => `<div><label>${label}</label><input type="number" inputmode="decimal" min="0" step="${step}" data-k="${key}" value="${inputs[key] ?? ''}" placeholder="미정"></div>`;
+  // 목록을 점 찍은 줄로 만든다. 없으면 '없음'
   const li = (arr) => (arr?.length ? `<ul>${arr.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '없음');
+  // 청소 문의인지
   const isCleaning = a.job_category === 'cleaning';
 
+  // 화면에 그린다: 제목과 상태 / 숨고에 보낼 답변 / 예상 견적 입력 칸 / 분석 결과 / 추가 사진 등록 / 대화 기록 / 처리 상태
   app.innerHTML = `
   <div class="card">
     <h2>${esc(inq.title)}</h2>
@@ -332,15 +384,18 @@ async function renderDetail(id) {
     <details><summary class="muted">처리 기록</summary>${inq.log.map((l) => `<div class="muted">${when(l.at)} · ${esc(l.action)}${l.detail ? ` — ${esc(l.detail)}` : ''}</div>`).join('')}</details>
   </div>`;
 
+  // 방금 그린 화면에서 답변 칸과 금액 표시 자리를 찾아 두고, 이익률 기준을 저장된 값으로 맞춘다
   const replyEl = document.getElementById('reply');
   const pricesEl = document.getElementById('prices');
   app.querySelector('[data-k="marginType"]').value = inputs.marginType || 'general';
 
+  // 고친 내용을 서버에 저장한다. 글자를 칠 때마다 보내지 않도록 0.8초 동안 더 고치지 않으면 보낸다
   let saveTimer;
   const saveDraft = () => {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => api(`/api/inquiries/${id}/draft`, { estimateInputs: inputs, draftReply: replyEl.value }).catch(() => {}), 800);
   };
+  // 고른 금액으로 견적 안내 답변을 만든다: {{견적}} 자리에 금액을 넣고, 답변 칸으로 화면을 옮긴다
   const makeEstimateReply = (priceText) => {
     replyEl.value = a.reply_with_estimate.replaceAll('{{견적}}', priceText);
     chosenPrice = priceText;
@@ -349,17 +404,22 @@ async function renderDetail(id) {
     toast('견적 안내 답변으로 바꿨습니다. 내용을 확인해 주세요.');
   };
 
+  // 두 가지 금액을 다시 계산해 보여준다. 계산된 쪽에는 '이 금액으로 답변 만들기' 버튼이 붙는다
   const drawPrices = () => {
     const { table, cost } = calc(config, inputs);
+    // 금액 칸 하나를 만드는 작은 함수
     const box = (key, title, r, detail) => `<div class="price"><div class="muted">${title}</div><b>${rangeText(r)}</b>
       ${r ? `<div class="muted">${detail}</div><p><button class="btn small" data-use="${key}">이 금액으로 답변 만들기</button></p>` : '<div class="muted">위 칸을 채우면 계산됩니다.</div>'}</div>`;
     pricesEl.innerHTML =
       box('table', '단가표 기준 (차량 35~40만 + 인원 15~20만)', table, table ? `사다리차 ${won(table.ladder)} 포함` : '') +
       box('cost', '원가 기준 (원가 ÷ (1 − 이익률))', cost, cost ? `총원가 ${won(cost.total)} · 이익률 ${Math.round(cost.marginMin * 100)}${cost.marginMax !== cost.marginMin ? `~${Math.round(cost.marginMax * 100)}` : ''}%` : '');
+    // 버튼을 누르면 그 방식의 금액으로 답변을 만든다
     pricesEl.querySelectorAll('[data-use]').forEach((b) => (b.onclick = () => makeEstimateReply(customerPrice(b.dataset.use === 'table' ? table : cost))));
   };
+  // 화면을 열자마자 한 번 계산해 보여준다
   drawPrices();
 
+  // 견적 입력 칸을 고칠 때마다 값을 반영하고(비우면 '모름'), 금액을 다시 계산하고, 저장한다
   app.querySelectorAll('[data-k]').forEach((el) => {
     el.oninput = () => {
       const k = el.dataset.k;
@@ -368,21 +428,26 @@ async function renderDetail(id) {
       saveDraft();
     };
   });
+  // 답변을 고쳐도 저장한다
   replyEl.oninput = saveDraft;
 
+  // '정보 요청 답변'·'견적 안내 답변' 버튼: 답변 칸을 그 답변으로 바꾼다
   document.getElementById('useInfo').onclick = () => ((replyEl.value = a.reply_need_info), (chosenPrice = null), saveDraft());
   document.getElementById('useEst').onclick = () => ((replyEl.value = a.reply_with_estimate), saveDraft(), toast('{{견적}} 자리에 금액을 넣어주세요.'));
+  // '직접 입력' 금액으로 답변 만들기
   document.getElementById('useManual').onclick = () => {
     const v = Number(document.getElementById('manual').value);
     if (!v) return toast('금액을 입력해 주세요.');
     makeEstimateReply(customerPrice({ min: v, max: v }));
   };
 
+  // '승인하고 복사' 버튼: 답변이 비었거나 {{견적}} 자리가 남아 있으면 막는다
   document.getElementById('approve').onclick = async () => {
     const reply = replyEl.value.trim();
     if (!reply) return toast('보낼 답변이 비어 있습니다.');
     if (reply.includes('{{견적}}')) return toast('답변에 {{견적}} 자리가 남아 있습니다. 금액을 넣어주세요.');
     try {
+      // 밀려 있던 자동 저장을 취소하고, 답변을 복사한 뒤, 서버에 승인을 기록하고 화면을 다시 그린다
       clearTimeout(saveTimer);
       // 버튼을 누른 직후에 복사해야 휴대폰 브라우저가 허용한다
       const copied = await copyText(reply);
@@ -394,6 +459,7 @@ async function renderDetail(id) {
     }
   };
 
+  // '추가하고 재분석' 버튼: 고객이 더 보낸 글과 사진을 올리고 다시 분석한다
   document.getElementById('addMore').onclick = async (e) => {
     e.target.disabled = true;
     try {
@@ -406,6 +472,7 @@ async function renderDetail(id) {
     }
   };
 
+  // 처리 상태 버튼(예약 확정·보류·거절): 예약 확정은 예약일을 골라야 한다
   app.querySelectorAll('[data-s]').forEach((b) => {
     b.onclick = async () => {
       const status = b.dataset.s;
@@ -425,11 +492,14 @@ async function renderDetail(id) {
 // ---------- 설정 (켜고 끄기) ----------
 async function renderSettings() {
   clearInterval(pollTimer);
+  // 서버에서 지금 설정과 상태를 받는다
   const st = await api('/api/state');
   const sg = st.soomgo;
+  // 노트북에서 직접 보고 있는지, 외부 접속 주소로 보고 있는지
   const local = ['localhost', '127.0.0.1'].includes(location.hostname);
   const viaTunnel = Boolean(st.tunnelUrl) && location.origin === st.tunnelUrl;
 
+  // 숨고 자동 확인의 상태 한 줄
   const soomgoLine = !st.settings.soomgo
     ? '<span class="dot"></span>꺼져 있습니다. 새 요청서는 캡처해서 직접 올립니다.'
     : sg.state === 'ok'
@@ -440,6 +510,7 @@ async function renderSettings() {
           ? `<span class="dot bad"></span>${esc(sg.message)}`
           : '<span class="dot wait"></span>시작하는 중입니다.';
 
+  // 밖에서 접속하기의 상태 한 줄: 꺼짐 / 주소와 복사 버튼 / 문제 안내 / 주소 만드는 중
   const tunnelLine = !st.settings.tunnel
     ? '<span class="dot"></span>꺼져 있습니다. 집 와이파이 안에서만 접속됩니다.'
     : st.tunnelUrl
@@ -450,8 +521,10 @@ async function renderSettings() {
         ? `<span class="dot bad"></span><span class="err">${esc(st.tunnelNote).replace(/https:\/\/\S+/, (u) => `<a href="${u}" target="_blank">${u}</a>`)}</span>`
         : '<span class="dot wait"></span>주소를 만드는 중입니다. 잠시만 기다려 주세요.';
 
+  // 켜고 끄는 스위치 하나를 만드는 작은 함수
   const sw = (id, on) => `<label class="switch" aria-label="켜기 끄기"><input type="checkbox" id="${id}" ${on ? 'checked' : ''}><span></span></label>`;
 
+  // 화면에 그린다: 프로그램 상태와 버전 / 숨고 자동 확인 / 분석할 AI / 숨고 답변 보내는 방식 / 밖에서 접속하기 / 카톡 일감 잡기 / 카카오톡 알림 / 프로그램 끄기
   app.innerHTML = `
   <div class="card"><span class="dot on"></span><b>프로그램이 켜져 있습니다</b>
     <p class="muted">노트북이 켜져 있는 동안 계속 동작합니다. 노트북 덮개를 닫으면 멈춥니다.${st.version ? `<br>버전 ${esc(st.version)}` : ''}</p></div>
@@ -516,6 +589,7 @@ async function renderSettings() {
     <button class="btn danger block" id="off">프로그램 끄기</button>
   </div>`;
 
+  // 스위치를 바꿨을 때: 확인 문구가 있으면 먼저 묻고(취소하면 스위치를 되돌린다), 서버에 저장한 뒤 다시 그린다
   const change = async (key, el, confirmMsg) => {
     if (confirmMsg && !confirm(confirmMsg)) return (el.checked = !el.checked);
     el.disabled = true;
@@ -527,8 +601,10 @@ async function renderSettings() {
     }
     renderSettings();
   };
+  // 숨고 스위치. 노트북이 아닌 곳에서 켜면 크롬 창이 열린다는 것을 먼저 알린다
   document.getElementById('swSoomgo').onchange = (e) =>
     change('soomgo', e.target, e.target.checked && !local ? '켜면 노트북에 크롬 창이 열립니다. 처음에는 노트북 앞에서 숨고에 로그인해야 합니다. 켤까요?' : '');
+  // 분석할 AI를 바꿨을 때
   document.getElementById('aiProvider').onchange = async (e) => {
     try {
       await api('/api/settings', { ai: e.target.value });
@@ -538,6 +614,7 @@ async function renderSettings() {
     }
     renderSettings();
   };
+  // 숨고 답변 보내는 방식을 바꿨을 때. '자동 발송'은 숨고캐시가 나간다는 것을 한 번 더 확인한다
   document.getElementById('quoteMode').onchange = async (e) => {
     const mode = e.target.value;
     if (mode === 'send' && !confirm('사장님 확인 없이 숨고에 견적이 발송되고, 보낼 때마다 숨고캐시가 나갑니다. 이 방식으로 바꿀까요?')) return renderSettings();
@@ -549,6 +626,7 @@ async function renderSettings() {
     }
     renderSettings();
   };
+  // 밖에서 접속하기 스위치. 밖에서 접속한 채로 끄면 바로 끊긴다는 것을 먼저 알린다
   document.getElementById('swTunnel').onchange = (e) =>
     change('tunnel', e.target, !e.target.checked && viaTunnel ? '지금 밖에서 접속 중입니다. 끄면 이 화면이 바로 끊기고, 집에 가서 다시 켜야 합니다. 끌까요?' : '');
   // 방 이름을 직접 치다 틀리지 않게, 이 노트북 카카오톡의 방 목록에서 고를 수 있게 한다
@@ -561,6 +639,7 @@ async function renderSettings() {
       hint.textContent = rooms.length ? `방 ${rooms.length}개를 불러왔습니다. 위 칸을 비우고 누르면 목록에서 고를 수 있습니다.` : note || '방 목록을 불러오지 못했습니다. 방 이름을 직접 입력해 주세요.';
     })
     .catch(() => {});
+  // 카톡 일감 잡기 '저장' 버튼: 방 이름, 찾을 말, 보낼 글, 보낼 곳을 서버에 저장한다
   document.getElementById('talkSave').onclick = async () => {
     try {
       await api('/api/settings', { talk: { room: document.getElementById('talkRoom').value, keyword: document.getElementById('talkKeyword').value, message: document.getElementById('talkMessage').value, target: document.getElementById('talkTarget').value } });
@@ -569,8 +648,10 @@ async function renderSettings() {
       toast(err.message);
     }
   };
+  // 외부 접속 주소 복사 버튼 (주소가 있을 때만 있다)
   const copyBtn = document.getElementById('copyUrl');
   if (copyBtn) copyBtn.onclick = async () => toast((await copyText(st.tunnelUrl)) ? '주소를 복사했습니다.' : '복사가 안 됩니다. 주소를 길게 눌러 복사해 주세요.');
+  // '프로그램 끄기' 버튼: 한 번 더 묻고, 서버에 끄라고 한 뒤 안내를 보여준다
   document.getElementById('off').onclick = async () => {
     if (!confirm('프로그램을 끌까요?\n다시 켜려면 노트북 바탕화면의 "싹다클린 AI 비서"를 두 번 눌러야 합니다.')) return;
     await api('/api/shutdown', {}).catch(() => {});
@@ -583,7 +664,9 @@ async function renderSettings() {
 }
 
 // ---------- 시작 ----------
+// 주소 뒤의 # 부분을 보고 알맞은 화면을 그린다: #/i/번호는 문의 한 건, #/new는 새 문의, #/settings는 설정, 그 밖에는 목록
 async function route() {
+  // 아직 서버에서 설정을 받기 전(로그인 전)이면 아무것도 그리지 않는다
   if (!config) return;
   const h = location.hash;
   try {
@@ -591,14 +674,17 @@ async function route() {
     else if (h === '#/new') renderNew();
     else if (h === '#/settings') await renderSettings();
     else await renderList();
+    // 화면 맨 위로 올리고, 바로 보여줄 칸이 정해져 있으면 그 칸으로 내려간다
     window.scrollTo(0, 0);
     if (focusCard) document.getElementById(focusCard)?.scrollIntoView();
     focusCard = null;
   } catch (e) {
+    // 그리다가 오류가 나면 그 문구를 보여준다 (로그인 화면이 뜬 경우는 빼고)
     if (e.message !== '로그인이 필요합니다.') app.innerHTML = `<div class="card err">${esc(e.message)}</div>`;
   }
 }
 
+// 처음 시작: 서버에서 설정을 받아 오고 화면을 그린다. 로그인이 안 돼 있으면 api가 로그인 화면을 띄운다
 async function boot() {
   try {
     const state = await api('/api/state');
@@ -610,5 +696,6 @@ async function boot() {
   }
 }
 
+// 주소의 # 부분이 바뀔 때마다 화면을 다시 그리고, 지금 바로 한 번 시작한다
 window.addEventListener('hashchange', route);
 boot();

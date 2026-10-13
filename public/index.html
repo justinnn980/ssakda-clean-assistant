@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="ko">
+<!-- 브라우저에 알려주는 정보: 글자 방식(한글), 휴대폰 화면 폭에 맞추기, 주소창 색, 탭 제목, 꾸밈 파일 -->
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -8,6 +9,7 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+<!-- 맨 위 줄: 프로그램 이름(누르면 첫 화면), 설정 버튼, 새 문의 버튼 -->
 <header>
   <a href="#/" class="brand">싹다클린 AI 비서</a>
   <span class="row">
@@ -15,8 +17,11 @@
     <a href="#/new" class="btn primary small" id="newBtn">+ 새 문의</a>
   </span>
 </header>
+<!-- 화면 내용이 들어가는 자리. app.js가 여기에 목록·문의·설정 화면을 그려 넣는다 -->
 <main id="app"></main>
+<!-- 화면 아래에 잠깐 뜨는 알림 자리. 평소에는 숨겨져 있다 -->
 <div id="toast" hidden></div>
+<!-- 화면을 움직이는 코드 -->
 <script type="module" src="/app.js"></script>
 </body>
 </html>
