@@ -33,12 +33,10 @@ const val = (f) => {
   }
 };
 
-// 채팅방 창을 찾는다. 닫혀 있으면 채팅 목록에서 그 방을 열어 준다(이때만 카카오톡이 잠깐 앞으로 나온다).
-function roomWindow(proc, room) {
-  if (proc.windows.byName(room).exists()) return proc.windows.byName(room);
+// 채팅 목록 창. 창만 닫혀 있으면 Dock 아이콘을 누른 것처럼 다시 연다.
+function mainWindow(proc) {
   const main = proc.windows.byName('카카오톡');
   if (!main.exists()) {
-    // 창만 닫혀 있는 경우: Dock 아이콘을 누른 것처럼 다시 연다
     const app = Application('KakaoTalk');
     try {
       app.reopen();
@@ -47,21 +45,63 @@ function roomWindow(proc, room) {
     for (let n = 0; n < 15 && !main.exists(); n++) delay(0.2);
   }
   if (!main.exists()) throw new Error('카카오톡 창이 닫혀 있습니다. 카카오톡 창을 열어 주세요.');
+  return main;
+}
+
+// 채팅 목록의 한 줄을 열어 name 이름의 채팅방 창을 돌려준다. 열리지 않으면 null.
+function openRow(proc, main, row, name) {
+  // 다른 채팅방 창이 앞에 있으면 Enter가 그 창으로 가므로, 채팅 목록 창을 맨 앞으로 올린 뒤 누른다
+  Application('KakaoTalk').activate();
+  main.actions.byName('AXRaise').perform();
+  delay(0.3);
+  row.selected = true;
+  delay(0.2);
+  Application('System Events').keyCode(36);
+  for (let n = 0; n < 15 && !proc.windows.byName(name).exists(); n++) delay(0.2);
+  return proc.windows.byName(name).exists() ? proc.windows.byName(name) : null;
+}
+
+// 채팅 목록 한 줄의 글자들: [방 이름, (단체방이면 인원 수), 시각 …]. 단체방인지는 둘째 글자가 숫자인지로 가린다.
+const rowTexts = (row) => row.uiElements[0].staticTexts.value().map(String);
+const isGroup = (texts) => /^\d+$/.test(texts[1] || '');
+
+// 채팅방 창을 찾는다. 닫혀 있으면 채팅 목록에서 그 방을 열어 준다(이때만 카카오톡이 잠깐 앞으로 나온다).
+function roomWindow(proc, room) {
+  if (proc.windows.byName(room).exists()) return proc.windows.byName(room);
+  const main = mainWindow(proc);
   const rows = main.scrollAreas[0].tables[0].rows();
   for (let i = 0; i < Math.min(rows.length, 60); i++) {
     if (val(() => rows[i].uiElements[0].staticTexts[0].value()) !== room) continue;
-    // 다른 채팅방 창이 앞에 있으면 Enter가 그 창으로 가므로, 채팅 목록 창을 맨 앞으로 올린 뒤 누른다
-    Application('KakaoTalk').activate();
-    main.actions.byName('AXRaise').perform();
-    delay(0.3);
-    rows[i].selected = true;
-    delay(0.2);
-    Application('System Events').keyCode(36);
-    for (let n = 0; n < 15 && !proc.windows.byName(room).exists(); n++) delay(0.2);
-    if (proc.windows.byName(room).exists()) return proc.windows.byName(room);
+    const win = openRow(proc, main, rows[i], room);
+    if (win) return win;
     break;
   }
   throw new Error(`"${room}" 채팅방을 찾지 못했습니다. 카카오톡을 '채팅' 탭으로 두고 방 이름을 확인해 주세요.`);
+}
+
+// 이름이 name인 1:1 채팅방이 이미 있으면 그 창을 돌려준다(없으면 null). 단체방은 건너뛴다.
+// 오픈채팅방에서는 프로필로 대화를 새로 걸 수 없어서, 전에 대화해 둔 방으로 보낼 때 쓴다.
+function existingChat(proc, name) {
+  if (proc.windows.byName(name).exists()) return { win: proc.windows.byName(name), wasOpen: true };
+  const main = mainWindow(proc);
+  let rows;
+  try {
+    rows = main.scrollAreas[0].tables[0].rows();
+  } catch (e) {
+    throw new Error("카카오톡 창이 '채팅' 탭이 아니어서 1:1 채팅방을 찾지 못했습니다.");
+  }
+  for (let i = 0; i < Math.min(rows.length, 60); i++) {
+    let texts;
+    try {
+      texts = rowTexts(rows[i]);
+    } catch (e) {
+      continue;
+    }
+    if (texts[0] !== name || isGroup(texts)) continue;
+    const win = openRow(proc, main, rows[i], name);
+    return win ? { win, wasOpen: false } : null;
+  }
+  return null;
 }
 
 // 설정 화면에서 방을 고를 수 있게 채팅 목록의 방 이름을 돌려준다. 마지막 글 내용은 읽지 않는다.
@@ -78,15 +118,14 @@ function roomList(proc) {
   for (let i = 0; i < Math.min(rows.length, 40); i++) {
     let texts;
     try {
-      texts = rows[i].uiElements[0].staticTexts.value();
+      texts = rowTexts(rows[i]);
     } catch (e) {
       continue;
     }
-    const name = texts[0] ? String(texts[0]) : '';
-    if (!name) continue;
-    const members = texts.slice(1).find((t) => /^\d+$/.test(String(t)));
-    const open = Boolean(members) && rows[i].uiElements[0].images.description().some((d) => String(d).includes('openchat'));
-    rooms.push({ name, members: members ? Number(members) : 0, open });
+    if (!texts[0]) continue;
+    const members = isGroup(texts) ? Number(texts[1]) : 0;
+    const open = members > 0 && rows[i].uiElements[0].images.description().some((d) => String(d).includes('openchat'));
+    rooms.push({ name: texts[0], members, open });
   }
   return { rooms };
 }
@@ -191,26 +230,10 @@ function findText(file, needle) {
   return null;
 }
 
-// room 방에서 본문이 rowText인 글을 올린 사람에게 1:1 채팅으로 text를 보낸다.
-// 단계마다 확인하고, 하나라도 어긋나면 아무 글도 보내지 않고 사유를 돌려준다. dry면 1:1 채팅 창을 여는 데까지만 한다.
-function direct(proc, room, text, rowText, dry) {
+// 프로필 사진을 눌러 1:1 채팅 창을 연다. 열지 못하면 사유를 담아 던진다.
+function chatViaProfile(proc, win, room, cell, sender) {
   const app = Application.currentApplication();
   app.includeStandardAdditions = true;
-  const win = roomWindow(proc, room);
-  Application('KakaoTalk').activate();
-  win.actions.byName('AXRaise').perform();
-  delay(0.3);
-
-  const rows = win.scrollAreas[0].tables[0].rows();
-  let cell = null;
-  for (let i = rows.length - 1; i >= Math.max(0, rows.length - 12) && !cell; i--) {
-    const c = rows[i].uiElements[0];
-    if (val(() => c.textAreas[0].value()) === rowText) cell = c;
-  }
-  if (!cell) throw new Error('일감 글을 다시 찾지 못했습니다.');
-  const sender = senderOf(cell);
-  if (!sender) throw new Error('내가 올린 글이라 보내지 않았습니다.');
-
   const photo = cell.buttons.whose({ description: '프로필' })()[0];
   const wp = win.position();
   const ws = win.size();
@@ -226,7 +249,7 @@ function direct(proc, room, text, rowText, dry) {
     delay(0.2);
     popup = screenWindows().find((w) => !before.includes(w.id) && !w.named);
   }
-  if (!popup) throw new Error('프로필 창이 뜨지 않았습니다. 오픈채팅방에서는 프로필이 열리지 않습니다.');
+  if (!popup) throw new Error('프로필 창이 뜨지 않았습니다.');
   delay(0.5);
 
   // 프로필 창 아래쪽(버튼이 있는 띠)만 찍어서 "1:1 채팅" 글자의 위치를 찾는다
@@ -236,7 +259,7 @@ function direct(proc, room, text, rowText, dry) {
   app.doShellScript(`/usr/sbin/screencapture -x -R ${popup.x},${top},${popup.w},${strip} '${shot}'`);
   const hit = findText(shot, '1:1채팅');
   app.doShellScript(`/bin/rm -f '${shot}'`);
-  if (!hit) throw new Error('프로필 창에서 "1:1 채팅" 버튼을 찾지 못했습니다. 대화를 걸 수 없는 상대이거나 화면 기록 권한이 없을 수 있습니다.');
+  if (!hit) throw new Error('프로필 창에서 "1:1 채팅" 버튼을 찾지 못했습니다(화면 기록 권한이 없을 수도 있습니다).');
   mouseClick(popup.x + (hit.x + hit.w / 2) * popup.w, top + (1 - (hit.y + hit.h / 2)) * strip);
 
   // 1:1 채팅 창: 올린 사람 이름의 창, 또는 새로 열린 창 하나
@@ -249,13 +272,54 @@ function direct(proc, room, text, rowText, dry) {
       if (fresh.length === 1) chat = fresh[0];
     }
   }
-  if (!chat || val(() => chat.name()) === room) throw new Error('1:1 채팅 창이 열리지 않았습니다.');
-  const wasOpen = openBefore.includes(val(() => chat.name()));
-  const result = dry ? { sent: false, opened: true, to: sender } : { ...send(chat, text), to: sender };
-  // 이번에 새로 연 창이면 닫아서 화면을 원래대로 둔다
-  if (!wasOpen) {
+  if (!chat) throw new Error('1:1 채팅 창이 열리지 않았습니다.');
+  return { win: chat, wasOpen: openBefore.includes(val(() => chat.name())) };
+}
+
+// room 방에서 본문이 rowText인 글을 올린 사람에게 1:1 채팅으로 text를 보낸다.
+// 일반 단체방에서는 그 사람의 프로필에서 1:1 채팅을 연다. 오픈채팅방(프로필이 열리지 않는다)이거나 프로필로 열지 못하면,
+// 그 사람과 이미 만들어 둔 1:1 채팅방을 채팅 목록에서 이름으로 찾아 보낸다.
+// 단계마다 확인하고, 보낼 창을 얻지 못하면 아무 글도 보내지 않고 사유를 돌려준다. dry면 1:1 채팅 창을 여는 데까지만 한다.
+function direct(proc, room, text, rowText, dry) {
+  const win = roomWindow(proc, room);
+  Application('KakaoTalk').activate();
+  win.actions.byName('AXRaise').perform();
+  delay(0.3);
+
+  const rows = win.scrollAreas[0].tables[0].rows();
+  let cell = null;
+  for (let i = rows.length - 1; i >= Math.max(0, rows.length - 12) && !cell; i--) {
+    const c = rows[i].uiElements[0];
+    if (val(() => c.textAreas[0].value()) === rowText) cell = c;
+  }
+  if (!cell) throw new Error('일감 글을 다시 찾지 못했습니다.');
+  const sender = senderOf(cell);
+  if (!sender) throw new Error('내가 올린 글이라 보내지 않았습니다.');
+
+  // 오픈채팅방 창에는 위쪽에 '댓글' 버튼이 있다
+  const openChat = win.buttons.whose({ description: '댓글' })().length > 0;
+  let chat = null;
+  let via = '';
+  let why = openChat ? '오픈채팅방이라 프로필로는 대화를 걸 수 없습니다.' : '';
+  if (!openChat) {
     try {
-      chat.buttons.whose({ description: '닫기 버튼' })()[0].click();
+      chat = chatViaProfile(proc, win, room, cell, sender);
+      via = 'profile';
+    } catch (e) {
+      why = String(e.message);
+    }
+  }
+  if (!chat) {
+    chat = existingChat(proc, sender);
+    via = 'list';
+    if (!chat) throw new Error(`${why} "${sender}"님과 만들어 둔 1:1 채팅방도 채팅 목록에서 찾지 못했습니다.`);
+  }
+  if (val(() => chat.win.name()) === room) throw new Error('1:1 채팅 창이 아니라 지켜보는 방이 열려 보내지 않았습니다.');
+  const result = dry ? { sent: false, opened: true, to: sender, via } : { ...send(chat.win, text), to: sender, via };
+  // 이번에 새로 연 창이면 닫아서 화면을 원래대로 둔다
+  if (!chat.wasOpen) {
+    try {
+      chat.win.buttons.whose({ description: '닫기 버튼' })()[0].click();
     } catch (e) {}
   }
   return result;

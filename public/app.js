@@ -485,7 +485,7 @@ async function renderSettings() {
 
   <div class="card" id="talkCard">
     <h2>카톡 일감 잡기</h2>
-    <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. 노트북의 카카오톡이 켜져 있어야 하고, 개인톡을 보내는 3초쯤은 마우스가 저절로 움직입니다. 오픈채팅방에서는 개인톡을 보낼 수 없습니다. 저장하면 바로 적용됩니다.</p>
+    <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. 노트북의 카카오톡이 켜져 있어야 하고, 개인톡을 보내는 3초쯤은 마우스가 저절로 움직입니다. 오픈채팅방에서는 프로필로 대화를 걸 수 없어서, 그 사람과 이미 만들어 둔 1:1 채팅방이 있을 때만 그 방으로 보냅니다. 저장하면 바로 적용됩니다.</p>
     <label>지켜볼 채팅방</label>
     <input id="talkRoom" list="talkRooms" value="${esc(st.settings.talk.room)}" placeholder="카카오톡에 보이는 방 이름 그대로" autocomplete="off">
     <datalist id="talkRooms"></datalist>
