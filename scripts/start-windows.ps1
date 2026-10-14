@@ -11,8 +11,10 @@ $Url = 'http://localhost:3210'
 $Title = '싹다클린 AI 비서'
 # 프로그램 폴더로 간다
 Set-Location $AppDir
-# Claude Code(claude.exe)가 설치되는 위치를 실행 경로에 넣는다
-$env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+# 실행 경로를 윈도우에 저장된 값(컴퓨터 전체 + 이 사용자)으로 다시 만든다.
+# 바탕화면은 프로그램을 막 설치했을 때 예전 경로를 들고 있어서 Node.js 등을 못 찾기 때문이다.
+# 그리고 Claude Code(claude.exe)가 설치되는 위치를 붙인다
+$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User') + ";$env:USERPROFILE\.local\bin"
 
 # 알림 창을 띄우고, 누른 버튼을 돌려준다
 function Show-Box($text, $buttons = 'OK', $icon = 'Information') {
