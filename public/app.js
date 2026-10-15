@@ -12,6 +12,8 @@ let kakaoState = null;
 // 화면을 주기적으로 새로 고치는 타이머
 let pollTimer = null;
 let focusCard = null; // 설정 화면을 열 때 바로 보여줄 칸
+// 견적 기능(숨고 받은 요청 확인, 예상 금액, 견적 보내기)을 보여줄지. 서버가 알려준다 (지금은 꺼 두고 숨겼다)
+let quoteFeatures = true;
 
 // 서버가 쓰는 영어 값을 화면에 보여줄 한글로 바꾸는 표: 문의 상태, 위험도, 필요 여부
 const STATUS = { analyzing: '분석 중', awaiting_owner: '승인 대기', sent: '전송 완료', on_hold: '보류', rejected: '거절', booked: '예약 확정', error: '분석 실패' };
@@ -118,8 +120,26 @@ function soomgoOkText(sg) {
   return `<span class="dot on"></span>숨고 자동 확인 · 마지막 확인 ${when(sg.lastCheck)}<br>${result}${!gotNew && sg.lastNew ? ` 마지막 새 요청 ${when(sg.lastNew)}` : ''}`;
 }
 
-// 자동 발송 결과를 한 줄로 적는다: 보냈음 / 발송 직전까지 준비 / 보내지 않은 사유
-const autoSendText = (a) => (a.sent ? `숨고에 자동 발송함 (${when(a.at)})` : a.prepared ? `발송 직전: ${esc(a.reason)}` : `자동 발송 안 함: ${esc(a.reason)}`);
+// 자동 발송 결과를 한 줄로 적는다: 보냈음 / 발송 직전까지 준비 / 보내지 않은 사유. kind가 chat이면 채팅 첫 응대의 결과다
+const autoSendText = (a, kind) =>
+  kind === 'chat'
+    ? a.sent ? `숨고 채팅에 첫 응대를 보냄 (${when(a.at)})` : a.prepared ? esc(a.reason) : `자동 응대 안 함: ${esc(a.reason)}`
+    : a.sent ? `숨고에 자동 발송함 (${when(a.at)})` : a.prepared ? `발송 직전: ${esc(a.reason)}` : `자동 발송 안 함: ${esc(a.reason)}`;
+// 숨고 채팅 첫 응대 방식의 화면 이름
+const CHAT_MODE = { send: '자동으로 보내기', fill: '채팅창에 써 두고 멈춤 (전송은 직접)' };
+
+// 숨고 채팅 자동 응대의 상태 한 줄: 꺼짐 / 잘 됨(마지막 확인) / 멈춤 / 로그인 필요 / 문제 / 여는 중
+function chatLine(st) {
+  const c = st.chat;
+  if (!st.settings.chat) return '<span class="dot"></span>꺼져 있습니다. 숨고 채팅을 확인하지 않고 답장도 보내지 않습니다.';
+  if (c.state === 'login') return '<span class="dot wait"></span>숨고 로그인이 필요합니다. 노트북에 열린 크롬 창에서 로그인하면 바로 시작합니다.';
+  if (c.state === 'error') return `<span class="dot bad"></span><span class="err">${esc(c.message)}</span>`;
+  if (c.state !== 'ok' || !c.lastCheck) return '<span class="dot wait"></span>숨고 창을 여는 중입니다.';
+  // 마지막 확인이 5분 넘게 지났으면 멈춘 것으로 보고 알린다
+  if (Date.now() - new Date(c.lastCheck) > 5 * 60 * 1000)
+    return `<span class="dot bad"></span><span class="err">숨고 채팅 확인이 ${when(c.lastCheck)} 이후 멈춰 있습니다. 노트북이 켜져 있는지, 숨고 크롬 창이 열려 있는지 확인해 주세요.</span>`;
+  return `<span class="dot on"></span>숨고 채팅 확인 중 · 마지막 확인 ${when(c.lastCheck)}<br>${esc(c.message)}${c.lastNew ? ` · 마지막 새 채팅방 ${when(c.lastNew)}` : ''}`;
+}
 // 숨고 답변 보내는 방식의 화면 이름
 const QUOTE_MODE = { off: '직접 보내기 (승인 후 복사)', fill: '발송 직전까지 자동 (숨고 창에 써 두고 멈춤)', send: '자동 발송 (확인 없이 보냄)' };
 
@@ -154,6 +174,12 @@ async function renderList() {
         : sg.state === 'error'
           ? `<span class="dot bad"></span><span class="err">${esc(sg.message)}</span>`
           : '<span class="dot wait"></span>숨고 창을 여는 중입니다.';
+  // 숨고 채팅 자동 응대 칸: 상태 한 줄, 답장 방식, 켜기·끄기 버튼
+  const chatOn = st.settings.chat;
+  const chatNote = `<div class="card"><div class="setting"><div><h2>숨고 채팅 자동 응대</h2>
+      <div class="muted">${chatLine(st)}</div>
+      ${chatOn ? `<div class="muted">새 채팅방이 생기면: ${CHAT_MODE[st.settings.chatMode]} <a href="#/settings" id="chatEdit">바꾸기</a></div>` : ''}</div>
+      <button class="btn ${chatOn ? 'danger' : 'primary'}" id="chatPower">${chatOn ? '끄기' : '켜기'}</button></div></div>`;
   // 숨고 비서 칸: 상태 한 줄, 답변 보내는 방식, 켜기·끄기 버튼
   const soomgoNote = `<div class="card"><div class="setting"><div><h2>숨고 비서</h2>
       <div class="muted">${soomgoLine}</div>
@@ -181,17 +207,17 @@ async function renderList() {
       ${tk.events.map((ev) => `<div class="muted">${when(ev.at)} · ${esc(ev.text)} → ${ev.sent ? `${ev.to ? `${esc(ev.to)}님에게 개인톡 보냄` : '같은 방에 답장 보냄'} (${(ev.ms / 1000).toFixed(1)}초)` : `<span class="err">못 보냄: ${esc(ev.note)}</span>`}</div>`).join('')}</div>
       <button class="btn ${talkOn ? 'danger' : 'primary'}" id="talkPower">${talkOn ? '끄기' : '켜기'}</button></div></div>`;
   // 화면에 그린다: 숨고 칸, 카톡 칸, 탭(탭마다 문의 수), 문의 카드들(제목·상태·위험도·지역·시각), 카카오 알림 안내
-  app.innerHTML = `${soomgoNote}${talkNote}<div class="tabs">${Object.entries(filters)
+  app.innerHTML = `${chatNote}${quoteFeatures ? soomgoNote : ''}${talkNote}<div class="tabs">${Object.entries(filters)
     .map(([k, v]) => `<button class="tab ${k === listFilter ? 'on' : ''}" data-f="${k}">${v} ${items.filter((i) => match[k].includes(i.status)).length}</button>`)
     .join('')}</div>
-    ${shown.length ? '' : '<div class="card muted">해당하는 문의가 없습니다. 오른쪽 위 "새 문의"로 숨고 캡처를 올려주세요.</div>'}
+    ${shown.length ? '' : `<div class="card muted">해당하는 문의가 없습니다.${quoteFeatures ? ' 오른쪽 위 "새 문의"로 숨고 캡처를 올려주세요.' : ''}</div>`}
     ${shown
       .map(
         (i) => `<a class="card item" href="#/i/${i.id}">
         <div class="item-title">${esc(i.title)}</div>
         <div><span class="badge ${i.status === 'error' ? 'error' : 'state'}">${STATUS[i.status]}</span>${i.risk ? `<span class="badge ${i.risk}">${RISK[i.risk]}</span>` : ''}</div>
         <div class="muted">${esc(i.region || '')} · ${when(i.updatedAt)}</div>
-        ${i.autoSend ? `<div class="muted">${autoSendText(i.autoSend)}</div>` : ''}</a>`,
+        ${i.autoSend ? `<div class="muted">${autoSendText(i.autoSend, i.kind)}</div>` : ''}</a>`,
       )
       .join('')}${kakaoNote}`;
   // 탭을 누르면 그 탭으로 바꿔 다시 그린다
@@ -209,8 +235,21 @@ async function renderList() {
     }
     renderList();
   };
-  // 숨고 비서 켜기·끄기 버튼
-  document.getElementById('power').onclick = async (e) => {
+  // 숨고 채팅 자동 응대 켜기·끄기 버튼과, 답장 방식 '바꾸기'
+  document.getElementById('chatPower').onclick = async (e) => {
+    e.target.disabled = true;
+    try {
+      await api('/api/settings', { chat: !chatOn });
+      toast(chatOn ? '채팅 자동 응대를 껐습니다.' : '채팅 자동 응대를 켰습니다. 노트북의 크롬 창을 확인해 주세요.');
+    } catch (err) {
+      toast(err.message);
+    }
+    renderList();
+  };
+  const chatEdit = document.getElementById('chatEdit');
+  if (chatEdit) chatEdit.onclick = () => (focusCard = 'chatCard');
+  // 숨고 비서 켜기·끄기 버튼 (견적 기능을 숨기면 없다)
+  if (quoteFeatures) document.getElementById('power').onclick = async (e) => {
     e.target.disabled = true;
     try {
       await api('/api/settings', { soomgo: !on });
@@ -220,9 +259,11 @@ async function renderList() {
     }
     renderList();
   };
-  // 얼마나 자주 새로 고칠지 정한다: 분석 중인 문의가 있거나 카톡을 지켜보는 중이면 5초, 숨고가 잘 돌고 있으면 1분, 숨고를 여는 중이면 5초, 다 꺼져 있으면 새로 고치지 않는다
+  // 얼마나 자주 새로 고칠지 정한다: 분석 중인 문의가 있거나 카톡을 지켜보는 중이면 5초, 숨고(채팅·받은 요청)가 잘 돌고 있으면 30초, 여는 중이면 5초, 다 꺼져 있으면 새로 고치지 않는다
   clearInterval(pollTimer);
-  const every = items.some((i) => i.status === 'analyzing') || talkOn ? 5000 : !on ? 0 : sg.state === 'ok' ? 60000 : 5000;
+  const soomgoOn = chatOn || (quoteFeatures && on);
+  const soomgoOk = (!chatOn || st.chat.state === 'ok') && (!(quoteFeatures && on) || sg.state === 'ok');
+  const every = items.some((i) => i.status === 'analyzing') || talkOn ? 5000 : !soomgoOn ? 0 : soomgoOk ? 30000 : 5000;
   // 첫 화면에 머물러 있을 때만 새로 고친다
   if (every) pollTimer = setInterval(() => location.hash.length <= 2 && renderList(), every);
 }
@@ -266,7 +307,7 @@ async function renderDetail(id) {
   const thread = `<details class="card" ${a ? '' : 'open'}><summary>문의·대화 기록 (${inq.messages.length})</summary><p></p>
     ${inq.messages
       .map(
-        (m) => `<div class="msg ${m.from}"><div class="muted">${m.from === 'owner' ? '사장님' : '고객'} · ${when(m.at)}</div>${esc(m.text)}
+        (m) => `<div class="msg ${m.from}"><div class="muted">${{ owner: '사장님', room: '숨고 채팅방 화면' }[m.from] || '고객'} · ${when(m.at)}</div>${esc(m.text)}
         <div class="thumbs">${(m.images || []).map((f) => `<a href="/api/inquiries/${id}/photo/${f}" target="_blank"><img src="/api/inquiries/${id}/photo/${f}" alt="첨부 사진"></a>`).join('')}</div></div>`,
       )
       .join('')}</details>`;
@@ -288,6 +329,9 @@ async function renderDetail(id) {
     document.getElementById('retry').onclick = async () => (await api(`/api/inquiries/${id}/reanalyze`, {}), renderDetail(id));
     return;
   }
+
+  // 숨고 채팅방에서 온 것이면 채팅 첫 응대 화면을 그린다
+  if (inq.kind === 'chat') return renderChatDetail(inq, thread);
 
   // 금액 계산에 넣을 값들(화면에서 고칠 수 있게 복사해 둔다)과 고른 금액
   const inputs = { ...inq.estimateInputs };
@@ -314,13 +358,13 @@ async function renderDetail(id) {
     <textarea class="reply" id="reply">${esc(inq.draftReply)}</textarea>
     <p class="row">
       <button class="btn small" id="useInfo">정보 요청 답변</button>
-      <button class="btn small" id="useEst">견적 안내 답변</button>
+      <button class="btn small" id="useEst" ${quoteFeatures ? '' : 'hidden'}>견적 안내 답변</button>
     </p>
     <button class="btn primary block" id="approve">승인하고 복사</button>
     <p class="muted">복사된 글을 숨고 앱에 붙여넣어 직접 보내주세요.</p>
   </div>
 
-  <div class="card">
+  <div class="card" ${quoteFeatures ? '' : 'hidden'}>
     <h2>⑩ 예상 견적</h2>
     ${isCleaning ? '<p class="muted">청소 문의는 아직 견적 기준이 없어 자동 계산하지 않습니다. 금액을 정하셨으면 아래 "직접 입력"을 쓰세요.</p>' : ''}
     ${a.estimate_ready ? '' : '<p class="err">현장 확인 필요 — 아직 확정할 정보가 부족합니다.</p>'}
@@ -372,17 +416,7 @@ async function renderDetail(id) {
 
   ${thread}
 
-  <div class="card">
-    <h2>처리 상태</h2>
-    <label>예약일 (예약 확정 시)</label>
-    <input id="bookDate" type="date" value="${esc(inq.booking?.date || '')}">
-    <p class="row">
-      <button class="btn" data-s="booked">예약 확정</button>
-      <button class="btn" data-s="on_hold">보류</button>
-      <button class="btn danger" data-s="rejected">거절</button>
-    </p>
-    <details><summary class="muted">처리 기록</summary>${inq.log.map((l) => `<div class="muted">${when(l.at)} · ${esc(l.action)}${l.detail ? ` — ${esc(l.detail)}` : ''}</div>`).join('')}</details>
-  </div>`;
+  ${statusCard(inq)}`;
 
   // 방금 그린 화면에서 답변 칸과 금액 표시 자리를 찾아 두고, 이익률 기준을 저장된 값으로 맞춘다
   const replyEl = document.getElementById('reply');
@@ -472,7 +506,24 @@ async function renderDetail(id) {
     }
   };
 
-  // 처리 상태 버튼(예약 확정·보류·거절): 예약 확정은 예약일을 골라야 한다
+  bindStatus(id);
+}
+
+// 처리 상태 칸: 예약일, 예약 확정·보류·거절 버튼, 처리 기록
+const statusCard = (inq) => `<div class="card">
+    <h2>처리 상태</h2>
+    <label>예약일 (예약 확정 시)</label>
+    <input id="bookDate" type="date" value="${esc(inq.booking?.date || '')}">
+    <p class="row">
+      <button class="btn" data-s="booked">예약 확정</button>
+      <button class="btn" data-s="on_hold">보류</button>
+      <button class="btn danger" data-s="rejected">거절</button>
+    </p>
+    <details><summary class="muted">처리 기록</summary>${inq.log.map((l) => `<div class="muted">${when(l.at)} · ${esc(l.action)}${l.detail ? ` — ${esc(l.detail)}` : ''}</div>`).join('')}</details>
+  </div>`;
+
+// 처리 상태 버튼(예약 확정·보류·거절): 예약 확정은 예약일을 골라야 한다
+function bindStatus(id) {
   app.querySelectorAll('[data-s]').forEach((b) => {
     b.onclick = async () => {
       const status = b.dataset.s;
@@ -487,6 +538,66 @@ async function renderDetail(id) {
       }
     };
   });
+}
+
+// ---------- 숨고 채팅 첫 응대 한 건 ----------
+function renderChatDetail(inq, thread) {
+  const id = inq.id;
+  const a = inq.analysis;
+  const sent = inq.status === 'sent';
+  // 화면에 그린다: 제목과 결과 / 보낸(보낼) 첫 응대 / 요청 내용 / 채팅방 화면 글 / 처리 상태
+  app.innerHTML = `
+  <div class="card">
+    <h2>${esc(inq.title)}</h2>
+    <div><span class="badge state">${STATUS[inq.status]}</span></div>
+    ${inq.autoSend ? `<p class="${inq.autoSend.sent || inq.autoSend.prepared ? 'muted' : 'err'}">${autoSendText(inq.autoSend, 'chat')}</p>` : ''}
+    ${inq.error ? `<p class="err">최근 재작성 실패: ${esc(inq.error)}</p>` : ''}
+  </div>
+
+  <div class="card">
+    <h2>${sent ? '고객에게 보낸 첫 응대' : '고객에게 보낼 첫 응대'}</h2>
+    <textarea class="reply" id="reply" ${sent ? 'readonly' : ''}>${esc(sent ? inq.finalReply : inq.draftReply)}</textarea>
+    ${sent ? '' : '<button class="btn primary block" id="approve">복사하고 보낸 것으로 표시</button><p class="muted">복사된 글을 숨고 채팅방에 붙여넣어 직접 보내주세요.</p>'}
+  </div>
+
+  <div class="card">
+    <h2>요청 내용</h2>
+    <dl>
+      <dt>서비스</dt><dd>${esc(a.service)}</dd>
+      <dt>지역</dt><dd>${esc(a.region)}</dd>
+      <dt>요약</dt><dd>${esc(a.summary)}</dd>
+      ${a.send ? '' : `<dt>AI가 보내지 않은 이유</dt><dd>${esc(a.skip_reason)}</dd>`}
+    </dl>
+  </div>
+
+  ${thread}
+
+  ${statusCard(inq)}`;
+
+  // 아직 보내지 않았으면 답장을 고칠 수 있고, 고친 내용은 0.8초 뒤 저장한다. '복사하고 보낸 것으로 표시'로 직접 보낸 것을 기록한다
+  if (!sent) {
+    const replyEl = document.getElementById('reply');
+    let saveTimer;
+    replyEl.oninput = () => {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => api(`/api/inquiries/${id}/draft`, { draftReply: replyEl.value }).catch(() => {}), 800);
+    };
+    document.getElementById('approve').onclick = async () => {
+      const reply = replyEl.value.trim();
+      if (!reply) return toast('보낼 답장이 비어 있습니다.');
+      try {
+        clearTimeout(saveTimer);
+        // 버튼을 누른 직후에 복사해야 휴대폰 브라우저가 허용한다
+        const copied = await copyText(reply);
+        await api(`/api/inquiries/${id}/approve`, { reply });
+        await renderDetail(id);
+        toast(copied ? '복사했습니다. 숨고 채팅방에 붙여넣어 보내주세요.' : '자동 복사가 안 됩니다. 글을 길게 눌러 복사해 주세요.');
+      } catch (e) {
+        toast(e.message);
+      }
+    };
+  }
+  bindStatus(id);
 }
 
 // ---------- 설정 (켜고 끄기) ----------
@@ -529,7 +640,18 @@ async function renderSettings() {
   <div class="card"><span class="dot on"></span><b>프로그램이 켜져 있습니다</b>
     <p class="muted">노트북이 켜져 있는 동안 계속 동작합니다. 노트북 덮개를 닫으면 멈춥니다.${st.version ? `<br>버전 ${esc(st.version)}` : ''}</p></div>
 
-  <div class="card">
+  <div class="card" id="chatCard">
+    <div class="setting"><div><h2>숨고 채팅 자동 응대</h2>
+      <div class="muted">1분마다 숨고 채팅 목록을 확인합니다. 스마트견적 등으로 새 채팅방이 생기면, 고객이 요청서에 남긴 내용을 바탕으로 확인할 것과 필요한 사진을 묻는 첫 응대를 한 번 보냅니다. 답장은 채팅방에 보이는 요청서와 견적 메시지만 보고 씁니다. 첫 화면의 "켜기·끄기"와 같은 스위치입니다.</div></div>
+      ${sw('swChat', st.settings.chat)}</div>
+    <div class="state-line">${chatLine(st)}</div>
+    <label>새 채팅방에 답장하는 방식</label>
+    <select id="chatMode">${Object.entries(CHAT_MODE).map(([k, v]) => `<option value="${k}" ${k === st.settings.chatMode ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    <p class="muted">"자동으로 보내기"는 확인 없이 고객에게 바로 보냅니다. 채팅방마다 한 번만 보내고, 이미 직접 대화 중인 채팅방, 업무와 관계없는 요청, 연락처나 금액이 들어간 답장은 보내지 않고 사유를 남깁니다. 켜기 전에 있던 채팅방에는 보내지 않습니다.<br>
+    "채팅창에 써 두고 멈춤"은 노트북의 숨고 창에 새 탭을 열어 답장을 써 두기만 합니다.</p>
+  </div>
+
+  <div class="card" ${quoteFeatures ? '' : 'hidden'}>
     <div class="setting"><div><h2>숨고 새 요청 자동으로 가져오기</h2>
       <div class="muted">3분마다 숨고 "받은 요청"을 확인해서 새 요청서를 알아서 등록합니다. 첫 화면의 "켜기·끄기"와 같은 스위치입니다.</div></div>
       ${sw('swSoomgo', st.settings.soomgo)}</div>
@@ -542,7 +664,7 @@ async function renderSettings() {
     <p class="muted">고른 쪽의 프로그램이 노트북에 설치되어 있고 유료 구독 계정으로 로그인되어 있어야 합니다. ChatGPT는 Codex, Claude는 Claude Code를 씁니다.</p>
   </div>
 
-  <div class="card">
+  <div class="card" ${quoteFeatures ? '' : 'hidden'}>
     <h2>숨고 답변 보내는 방식</h2>
     <select id="quoteMode">${Object.entries(QUOTE_MODE).map(([k, v]) => `<option value="${k}" ${k === st.settings.quoteMode ? 'selected' : ''}>${v}</option>`).join('')}</select>
     <p class="muted">"발송 직전까지 자동"은 숨고에서 가져온 요청의 분석이 끝나면 노트북의 숨고 창에 답변과 금액(계산된 경우)을 써 두고 멈춥니다. 캐시가 나가는 "견적 보내기"는 그 창에서 직접 누릅니다.<br>
@@ -598,6 +720,21 @@ async function renderSettings() {
       toast(el.checked ? '켰습니다.' : '껐습니다.');
     } catch (e) {
       toast(e.message);
+    }
+    renderSettings();
+  };
+  // 숨고 채팅 자동 응대 스위치. 노트북이 아닌 곳에서 켜면 크롬 창이 열린다는 것을 먼저 알린다
+  document.getElementById('swChat').onchange = (e) =>
+    change('chat', e.target, e.target.checked && !local ? '켜면 노트북에 크롬 창이 열립니다. 처음에는 노트북 앞에서 숨고에 로그인해야 합니다. 켤까요?' : '');
+  // 새 채팅방에 답장하는 방식을 바꿨을 때. '자동으로 보내기'는 확인 없이 고객에게 나간다는 것을 한 번 더 확인한다
+  document.getElementById('chatMode').onchange = async (e) => {
+    const mode = e.target.value;
+    if (mode === 'send' && !confirm('확인 없이 고객에게 첫 응대가 바로 나갑니다. 이 방식으로 바꿀까요?')) return renderSettings();
+    try {
+      await api('/api/settings', { chatMode: mode });
+      toast('바꿨습니다.');
+    } catch (err) {
+      toast(err.message);
     }
     renderSettings();
   };
@@ -659,7 +796,7 @@ async function renderSettings() {
   };
 
   // 상태가 바뀌는 중이면 자동으로 새로 고친다
-  const waiting = (st.settings.soomgo && sg.state !== 'ok') || (st.settings.tunnel && !st.tunnelUrl);
+  const waiting = (st.settings.chat && st.chat.state !== 'ok') || (quoteFeatures && st.settings.soomgo && sg.state !== 'ok') || (st.settings.tunnel && !st.tunnelUrl);
   if (waiting) pollTimer = setInterval(() => location.hash === '#/settings' && !document.querySelector('.switch input:disabled') && renderSettings(), 4000);
 }
 
@@ -690,6 +827,9 @@ async function boot() {
     const state = await api('/api/state');
     config = state.config;
     kakaoState = state.kakao;
+    // 견적 기능을 숨겼으면 맨 위의 '새 문의' 버튼도 숨긴다
+    quoteFeatures = state.quoteFeatures !== false;
+    document.getElementById('newBtn').hidden = !quoteFeatures;
     route();
   } catch {
     // 로그인 화면이 이미 표시됨

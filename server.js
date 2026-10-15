@@ -1,6 +1,7 @@
 // 싹다클린 숨고 문의 AI 비서 서버.
-// 사장님이 올린 캡처·사진이나 숨고에서 가져온 요청서를 분석해 답변 초안과 예상 견적을 만든다.
-// 숨고 확인과 답변 자동 발송은 설정에서 켠 경우에만 한다.
+// 숨고에 새 채팅방이 생기면 그 채팅방을 보고 첫 응대(확인할 것과 사진 요청)를 써서 보낸다.
+// 사장님이 올린 캡처·사진이나 숨고에서 가져온 요청서를 분석해 답변 초안과 예상 견적을 만드는 견적 기능은 꺼 두고 화면에서 숨겼다(QUOTE_FEATURES).
+// 숨고 확인과 자동 발송은 설정에서 켠 경우에만 한다.
 // ---- 노드(Node)에 기본으로 들어 있는 기능 ----
 // 웹 서버를 여는 기능
 import http from 'node:http';
@@ -66,6 +67,9 @@ if (!/^\d{4,}$/.test(PIN)) {
 const SESSION = createHash('sha256').update(`${PIN}:${process.env.SESSION_SECRET || ''}`).digest('hex');
 // 단가·원가·이익률이 적힌 config.json을 읽는다
 const cfg = JSON.parse(readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
+// 견적 기능(숨고 받은 요청 확인, 예상 금액 계산, 견적 보내기)을 쓸지. 2026-10-15 사용자 결정으로 끄고 화면에서 숨겼다.
+// 코드는 남겨 두었으니 true로 바꾸면 다시 쓸 수 있다
+const QUOTE_FEATURES = false;
 
 // ---------- 분석 대기열 (한 번에 한 건씩) ----------
 // 앞의 분석이 끝나야 다음 분석이 시작되도록 줄을 세우는 변수. 처음에는 '이미 끝난 일'로 시작한다
@@ -78,8 +82,9 @@ function enqueueAnalysis(id) {
 
 // 문의 한 건을 분석한다: AI 분석 → 금액 계산 → 답변 초안 → (설정에 따라) 숨고에 쓰기 → 카톡 알림
 async function runAnalysis(id) {
-  // 저장해 둔 문의를 읽는다
+  // 저장해 둔 문의를 읽는다. 숨고 채팅방에서 온 것이면 채팅 첫 응대를 만든다
   let inq = await store.load(id);
+  if (inq.kind === 'chat') return runChatReply(inq);
   try {
     // 설정에서 고른 AI에게 문의 글과 사진을 넘겨 분석 결과를 받는다 (보통 1분 안팎)
     const analysis = await analyze(inq, store.inquiryDir(id), settings.ai);
@@ -181,20 +186,108 @@ async function autoFill(inq, analysis, range) {
   inq.log.push({ at, action: '숨고 창에 발송 직전까지 준비', detail: range ? `견적 금액 ${won(range.min)}` : '금액 미정' });
 }
 
-// 새 문의를 만든다: 번호를 정하고, 사진을 저장하고, 문의 파일을 만든 뒤 분석 줄에 세운다
-async function createInquiry({ text, images, soomgoId = null }) {
+// ---------- 숨고 채팅 첫 응대 ----------
+// 채팅방 한 건의 첫 응대를 만든다: AI가 채팅방 화면을 보고 확인할 것과 사진을 요청하는 답장을 씀 → (설정에 따라) 숨고 채팅에 보내거나 써 둠 → 카톡 알림
+async function runChatReply(inq) {
+  const id = inq.id;
+  try {
+    const result = await analyze(inq, store.inquiryDir(id), settings.ai, 'chat');
+    // 분석하는 동안 화면에서 문의가 바뀌었을 수 있어 다시 읽은 뒤 결과를 붙인다
+    inq = await store.load(id);
+    inq.analysis = result;
+    inq.title = result.title || inq.title;
+    inq.draftReply = result.reply;
+    inq.status = 'awaiting_owner';
+    inq.error = null;
+    inq.log.push({ at: new Date().toISOString(), action: 'AI 첫 응대 작성' });
+    // 아직 보내기를 시도한 적이 없을 때만 보낸다 (채팅방마다 한 번)
+    if (!inq.autoSend) await chatAutoReply(inq, result);
+    await store.save(inq);
+    // 카톡 알림: 보냄 / 써 둠 / 보내지 않은 사유
+    const a = inq.autoSend;
+    const outcome = a.sent ? '첫 응대를 보냈습니다.' : a.prepared ? a.reason : `보내지 않았습니다: ${a.reason}`;
+    await kakao.notify(`[숨고 채팅] ${inq.title}\n${outcome}`, `/#/i/${id}`);
+  } catch (e) {
+    // AI가 실패하면 보내지 않고, 사유를 남긴 뒤 카톡으로 알린다
+    inq = await store.load(id);
+    inq.status = 'error';
+    inq.error = e.message;
+    inq.log.push({ at: new Date().toISOString(), action: '첫 응대 작성 실패', detail: e.message });
+    await store.save(inq);
+    await kakao.notify(`[숨고 채팅] 첫 응대를 만들지 못했습니다: ${inq.title}\n${e.message}`, `/#/i/${id}`);
+  }
+}
+
+// 고객에게 바로 나가는 글을 마지막으로 점검한다. 문제가 있으면 그 사유를, 없으면 빈 글을 돌려준다
+function replyProblem(text) {
+  if (!text.trim()) return '보낼 답장이 비어 있습니다.';
+  if (text.length > 1000) return '답장이 너무 깁니다.';
+  if (/\{\{|\}\}/.test(text)) return '답장에 채우지 않은 자리({{ }})가 남아 있습니다.';
+  // 전화번호, 인터넷 주소, 카카오톡·이메일 같은 연락처: 숨고 약관(우회 거래 유도) 때문에 보내지 않는다
+  if (/\d{2,4}[-.\s]?\d{3,4}[-.\s]?\d{4}|https?:\/\/|www\.|카톡|카카오|kakao|@/i.test(text)) return '답장에 연락처로 보이는 내용이 있습니다.';
+  // 금액: 첫 응대에서는 금액을 말하지 않는다 (예: 30만원, 150,000원)
+  if (/\d[\d,]*\s*(만\s*)?원/.test(text)) return '답장에 금액이 들어 있습니다.';
+  return '';
+}
+
+// 설정한 방식대로 채팅방에 답장을 보내거나 써 둔다. 한 채팅방에 한 번만 시도하고, 보내지 않았으면 그 사유를 남긴다.
+async function chatAutoReply(inq, result) {
+  const at = new Date().toISOString();
+  // 보내지 않기로 했을 때 그 사유를 문의에 남기는 작은 함수
+  const skip = (reason) => {
+    inq.autoSend = { sent: false, reason, at };
+    inq.log.push({ at, action: '자동 응대 안 함', detail: reason });
+  };
+  // AI가 보내지 않는 게 좋다고 본 경우 (이미 대화 중, 업무가 아닌 요청 등)
+  if (!result.send) return skip(result.skip_reason || 'AI가 보내지 않는 것이 좋다고 판단했습니다.');
+  // 답장에 연락처·금액 같은 것이 들어 있으면 보내지 않는다
+  const problem = replyProblem(result.reply);
+  if (problem) return skip(`${problem} 내용을 확인한 뒤 직접 보내주세요.`);
+  // 그 사이 숨고에 다른 계정으로 로그인했으면 보내지 않는다
+  if (soomgo.chatStatus.account !== inq.account) return skip('숨고에 로그인한 계정이 바뀌어 보내지 않았습니다.');
+  const reply = result.reply.trim();
+  // 써 두기만 하는 방식: 노트북의 숨고 창에 새 탭을 열어 채팅창에 써 둔다
+  if (settings.chatMode === 'fill') {
+    try {
+      await soomgo.prepareChat(inq.chatId, reply);
+    } catch (e) {
+      return skip(`숨고 채팅창에 써 두지 못했습니다. ${e.message.split('\n')[0]}`);
+    }
+    inq.autoSend = { sent: false, prepared: true, reason: '숨고 채팅창에 답장을 써 두었습니다. 확인하고 전송을 눌러주세요.', at };
+    inq.log.push({ at, action: '숨고 채팅창에 답장을 써 둠' });
+    return;
+  }
+  // 자동으로 보내는 방식
+  try {
+    await soomgo.sendChat(inq.chatId, reply);
+  } catch (e) {
+    console.error(`[숨고 채팅] 자동 응대 실패 ${inq.id}: ${e.message.split('\n')[0]}`);
+    return skip(`보내지 못했습니다. ${e.message.split('\n')[0]}`);
+  }
+  // 보낸 것으로 기록한다: 보낸 답장, 대화 기록, 상태는 '전송 완료'
+  inq.autoSend = { sent: true, at };
+  inq.finalReply = inq.draftReply = reply;
+  inq.messages.push({ at, from: 'owner', text: reply, images: [] });
+  inq.status = 'sent';
+  inq.log.push({ at, action: '숨고 채팅에 첫 응대를 자동으로 보냄' });
+}
+
+// 새 문의를 만든다: 번호를 정하고, 사진을 저장하고, 문의 파일을 만든 뒤 분석 줄에 세운다.
+// 숨고 채팅방에서 온 것(chatId)이면 채팅방 화면 글과 그때 로그인한 계정 번호(account)를 함께 저장한다
+async function createInquiry({ text, images, soomgoId = null, chatId = null, account = null }) {
   // 날짜·시각으로 된 새 문의 번호
   const id = store.newId();
   // 올라온 사진을 문의 폴더에 저장하고 파일 이름을 받는다
   const files = await store.saveImages(id, images);
   const now = new Date().toISOString();
-  // 문의의 처음 모습을 저장한다: 상태는 '분석 중', 첫 글은 고객 문의
+  // 문의의 처음 모습을 저장한다: 상태는 '분석 중', 첫 글은 고객 문의(채팅방이면 채팅방 화면 글)
   await store.save({
-    id, createdAt: now, status: 'analyzing', title: soomgoId ? '숨고 새 요청서' : text.slice(0, 30) || '새 문의', source: 'soomgo', soomgoId,
-    messages: [{ at: now, from: 'customer', text, images: files }],
+    id, createdAt: now, status: 'analyzing', source: 'soomgo', soomgoId, kind: chatId ? 'chat' : 'quote', chatId, account,
+    title: chatId ? '숨고 새 채팅방' : soomgoId ? '숨고 새 요청서' : text.slice(0, 30) || '새 문의',
+    messages: [{ at: now, from: chatId ? 'room' : 'customer', text, images: files }],
     analysis: null, estimateInputs: null, draftReply: '', finalReply: null, finalPrice: null, error: null,
     booking: { date: null, note: null },
-    log: [{ at: now, action: soomgoId ? '숨고에서 자동 등록' : '문의 등록' }],
+    log: [{ at: now, action: chatId ? '숨고 새 채팅방에서 자동 등록' : soomgoId ? '숨고에서 자동 등록' : '문의 등록' }],
   });
   // 분석 줄에 세우고, 문의 번호를 돌려준다
   enqueueAnalysis(id);
@@ -358,7 +451,7 @@ async function handle(req, res) {
   // --- 문의 목록: 목록 화면에 필요한 항목만 추려서 보낸다 ---
   if (method === 'GET' && p === '/api/inquiries') {
     const all = await store.list();
-    return send(res, 200, all.map((i) => ({ id: i.id, title: i.title, status: i.status, updatedAt: i.updatedAt, risk: i.analysis?.risk_level || null, region: i.analysis?.region || null, autoSend: i.autoSend || null })));
+    return send(res, 200, all.map((i) => ({ id: i.id, kind: i.kind || 'quote', title: i.title, status: i.status, updatedAt: i.updatedAt, risk: i.analysis?.risk_level || null, region: i.analysis?.region || null, autoSend: i.autoSend || null })));
   }
 
   // --- 새 문의 등록: 글이나 사진이 하나는 있어야 한다 ---
@@ -488,6 +581,9 @@ delete settings.autoSend;
 // 카카오톡 채팅방 지켜보기: 방 이름, 찾을 말, 보낼 글
 // 문의를 분석할 AI: codex(ChatGPT 구독) 또는 claude(Claude 구독)
 if (!(settings.ai in PROVIDERS)) settings.ai = 'codex';
+// 숨고 채팅 자동 응대 스위치와 답장 방식: send(바로 보냄), fill(채팅창에 써 두고 멈춤)
+settings.chat = Boolean(settings.chat);
+if (!['send', 'fill'].includes(settings.chatMode)) settings.chatMode = 'fill';
 // 카톡 일감 잡기 스위치와 기본값(찾을 말, 보낼 글, 보낼 곳). 저장된 값이 있으면 그 값이 우선이다
 settings.kakaoWatch = Boolean(settings.kakaoWatch);
 settings.talk = { room: '', keyword: '[방문견적]', message: '안녕하세요, 방문견적 가능합니다.', target: 'direct', ...settings.talk };
@@ -589,6 +685,15 @@ function startSoomgo() {
   });
 }
 
+// 숨고 채팅 자동 응대를 시작한다. 새 채팅방이 생기면 문의로 등록하고, 알릴 일이 생기면 카톡으로 보낸다
+function startChat() {
+  soomgo.startChatWatcher({ onNew: createInquiry, onAlert: (t) => kakao.notify(t) }).catch((e) => {
+    soomgo.chatStatus.state = 'error';
+    soomgo.chatStatus.message = `숨고 채팅 확인을 시작하지 못했습니다: ${e.message.split('\n')[0]}`;
+    console.error(`[숨고 채팅] ${soomgo.chatStatus.message}`);
+  });
+}
+
 // 설정 화면에서 바꾼 값을 받아 바로 적용하고 파일에 저장한다
 async function applySettings(next) {
   // 밖에서 접속하기 스위치. 비밀번호가 8자리보다 짧으면 켜지 못하게 한다
@@ -597,8 +702,14 @@ async function applySettings(next) {
     settings.tunnel = next.tunnel;
     next.tunnel ? startTunnel() : stopTunnel();
   }
-  // 숨고 비서 스위치. 켜면 크롬 창을 열고, 끄면 닫는다
-  if (typeof next.soomgo === 'boolean' && next.soomgo !== settings.soomgo) {
+  // 숨고 채팅 자동 응대 스위치와 답장 방식. 켜면 크롬 창을 열고, 끄면(받은 요청 확인도 꺼져 있으면) 닫는다
+  if (typeof next.chat === 'boolean' && next.chat !== settings.chat) {
+    settings.chat = next.chat;
+    next.chat ? startChat() : await soomgo.stopChatWatcher();
+  }
+  if (['send', 'fill'].includes(next.chatMode)) settings.chatMode = next.chatMode;
+  // 숨고 비서(받은 요청 확인) 스위치. 견적 기능을 끈 동안에는 바꾸지 않는다
+  if (QUOTE_FEATURES && typeof next.soomgo === 'boolean' && next.soomgo !== settings.soomgo) {
     settings.soomgo = next.soomgo;
     next.soomgo ? startSoomgo() : await soomgo.stopWatcher();
   }
@@ -632,20 +743,21 @@ try {
 } catch {
   // git이 없거나 내려받은 폴더가 아니면 표시하지 않는다
 }
-// 화면에 보여줄 지금 상태를 한데 모은다: 설정, 버전, 외부 접속 주소와 안내, 숨고 상태, 카톡 상태
-const featureState = () => ({ settings, version, tunnelUrl: tunnel.url, tunnelNote: tunnel.note, soomgo: soomgo.status, talk: kakaotalk.status });
+// 화면에 보여줄 지금 상태를 한데 모은다: 설정, 버전, 견적 기능을 보여줄지, 외부 접속 주소와 안내, 숨고 상태, 숨고 채팅 상태, 카톡 상태
+const featureState = () => ({ settings, version, quoteFeatures: QUOTE_FEATURES, tunnelUrl: tunnel.url, tunnelNote: tunnel.note, soomgo: soomgo.status, chat: soomgo.chatStatus, talk: kakaotalk.status });
 
 // 서버의 프로세스 번호를 적어 두는 파일. stop.sh가 이 번호로 프로그램을 끈다
 const PID_FILE = path.join(store.DATA_DIR, 'server.pid');
 // 끄는 중인지 표시한다 (두 번 끄지 않기 위해)
 let closing = false;
-// 프로그램을 끈다: 외부 접속, 카톡 지켜보기, 숨고 크롬 창을 차례로 멈추고 번호 파일을 지운 뒤 끝낸다
+// 프로그램을 끈다: 외부 접속, 카톡 지켜보기, 숨고 채팅·받은 요청 확인(크롬 창)을 차례로 멈추고 번호 파일을 지운 뒤 끝낸다
 async function shutdown() {
   if (closing) return;
   closing = true;
   console.log('싹다클린 AI 비서를 끕니다.');
   stopTunnel();
   kakaotalk.stop();
+  await soomgo.stopChatWatcher().catch(() => {});
   await soomgo.stopWatcher().catch(() => {});
   await unlink(PID_FILE).catch(() => {});
   process.exit(0);
@@ -672,6 +784,7 @@ server.listen(PORT, '0.0.0.0', async () => {
   console.log(`  접속 비밀번호: ${PIN}`);
   // 지난번에 켜 두었던 기능들을 다시 켠다
   if (settings.tunnel && PIN.length >= 8) startTunnel();
-  if (settings.soomgo) startSoomgo();
+  if (settings.soomgo && QUOTE_FEATURES) startSoomgo();
+  if (settings.chat) startChat();
   if (settings.kakaoWatch) kakaotalk.start(settings.talk);
 });

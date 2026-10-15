@@ -10,6 +10,8 @@
 }
 /* 모든 요소의 크기를 테두리까지 포함해서 계산한다 */
 * { box-sizing: border-box; }
+/* 숨김 표시(hidden)가 붙은 것은 버튼처럼 보이는 방식이 정해져 있어도 숨긴다 */
+[hidden] { display: none !important; }
 /* 화면 바탕과 기본 글자 */
 body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
 /* 맨 위 줄: 화면을 내려도 위에 붙어 있다 */
