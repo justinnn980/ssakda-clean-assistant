@@ -239,8 +239,8 @@ async function renderList() {
       .map(
         (i) => `<a class="card item" href="#/i/${i.id}">
         <div class="item-title">${esc(i.title)}</div>
-        <div><span class="badge ${i.status === 'error' ? 'error' : 'state'}">${STATUS[i.status]}</span>${i.risk ? `<span class="badge ${i.risk}">${RISK[i.risk]}</span>` : ''}</div>
-        <div class="muted">${esc(i.region || '')} · ${when(i.updatedAt)}</div>
+        <div><span class="badge ${i.status === 'error' ? 'error' : 'state'}">${i.status === 'error' && i.autoSend ? '확인 필요' : STATUS[i.status]}</span>${i.risk ? `<span class="badge ${i.risk}">${RISK[i.risk]}</span>` : ''}</div>
+        <div class="muted">${[esc(i.region || ''), when(i.updatedAt)].filter(Boolean).join(' · ')}</div>
         ${i.autoSend ? `<div class="muted">${autoSendText(i.autoSend, i.kind)}</div>` : ''}</a>`,
       )
       .join('')}${kakaoNote}`;
@@ -356,10 +356,15 @@ async function renderDetail(id) {
   }
 
   // 분석 결과가 없으면(분석 실패) 사유와 '다시 분석' 버튼을 보여준다
+  // 결과가 이미 정해진 문의(읽지 못한 채팅방 등)는 다시 분석할 것이 없어 사유만 보여준다
   if (!a) {
-    app.innerHTML = `<div class="card"><h2>${esc(inq.title)}</h2><p class="err">분석에 실패했습니다: ${esc(inq.error)}</p>
-      <button class="btn primary block" id="retry">다시 분석</button></div>${thread}`;
-    document.getElementById('retry').onclick = async () => (await api(`/api/inquiries/${id}/reanalyze`, {}), renderDetail(id));
+    app.innerHTML = `<div class="card"><h2>${esc(inq.title)}</h2>${
+      inq.autoSend
+        ? `<p class="err">${esc(inq.error || inq.autoSend.reason)}</p>`
+        : `<p class="err">분석에 실패했습니다: ${esc(inq.error)}</p><button class="btn primary block" id="retry">다시 분석</button>`
+    }</div>${thread}${inq.autoSend ? statusCard(inq) : ''}`;
+    document.getElementById('retry')?.addEventListener('click', async () => (await api(`/api/inquiries/${id}/reanalyze`, {}), renderDetail(id)));
+    if (inq.autoSend) bindStatus(id);
     return;
   }
 
@@ -585,6 +590,7 @@ function renderChatDetail(inq, thread) {
     <div><span class="badge state">${STATUS[inq.status]}</span></div>
     ${inq.autoSend ? `<p class="${inq.autoSend.sent || inq.autoSend.prepared ? 'muted' : 'err'}">${autoSendText(inq.autoSend, 'chat')}</p>` : ''}
     ${serverMode && extVersion() && inq.autoSend?.prepared && !sent ? '<button class="btn small" id="showRoom">숨고 창에서 보기</button>' : ''}
+    ${inq.extTask && !inq.autoSend ? '<p class="muted">PC 크롬이 이 답장을 숨고 채팅창에 써 넣는 중입니다.</p>' : ''}
     ${inq.error ? `<p class="err">최근 재작성 실패: ${esc(inq.error)}</p>` : ''}
   </div>
 

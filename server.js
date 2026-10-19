@@ -361,6 +361,18 @@ function claimChats(account, ids, count) {
   return job;
 }
 
+// 확장이 첫 응대를 가져가 놓고 10분 넘게 결과를 알리지 않으면(그 사이 PC 크롬이 꺼짐 등) 보내지 않은 것으로 남기고 알린다. 5분마다 본다
+if (EXT_RUNNER) {
+  setInterval(async () => {
+    for (const inq of await store.list().catch(() => [])) {
+      if (!inq.extTask || inq.autoSend || Date.now() - new Date(inq.extTask.at) < 10 * 60 * 1000) continue;
+      skipChat(inq, 'PC 크롬이 답장을 써 넣지 못했습니다. 문의의 답장을 복사해 숨고에서 직접 보내 주세요.');
+      await store.save(inq);
+      await notifyChatOutcome(inq);
+    }
+  }, 5 * 60 * 1000);
+}
+
 // ---------- HTTP 도우미 ----------
 // 파일 종류별로 브라우저에 알려줄 형식 이름
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
@@ -519,8 +531,6 @@ async function handle(req, res) {
       lastCheck: b.lastCheck ? text(b.lastCheck, 40) : null, lastNew: b.lastNew ? text(b.lastNew, 40) : null, seenAt: new Date().toISOString(),
     };
     if (next.state === 'login' && extStatus.state !== 'login') kakao.notify('[숨고 채팅] 숨고 로그인이 필요합니다. PC 크롬에 열린 숨고 창에서 로그인해 주세요.');
-    // 확장이 따로 알려 달라고 한 일(새 채팅방을 읽지 못함 등)
-    if (b.alert) kakao.notify(text(b.alert, 300));
     extStatus = next;
     return send(res, 200, { chat: settings.chat, chatMode: settings.chatMode });
   }
@@ -537,8 +547,27 @@ async function handle(req, res) {
     if (!/^[\w-]{1,64}$/.test(chatId) || !/^\d{1,20}$/.test(account)) return send(res, 400, { error: '채팅방 번호나 계정 번호가 올바르지 않습니다.' });
     if (!settings.chat) return send(res, 409, { error: '채팅 자동 응대가 꺼져 있습니다.' });
     const text = `[숨고 채팅방 화면]\n${String(b.text || '').trim()}`.slice(0, 12000);
-    const images = (Array.isArray(b.images) ? b.images : []).slice(0, 6);
+    // 사진은 JPG·PNG·WEBP 글자 형태만 받는다 (이상한 것이 섞여도 채팅방 등록은 계속한다)
+    const images = (Array.isArray(b.images) ? b.images : []).filter((u) => /^data:image\/(jpeg|png|webp);base64,/.test(u)).slice(0, 6);
     return send(res, 201, { id: await createInquiry({ text, images, chatId, account, source: 'ext' }) });
+  }
+  // 확장이 새 채팅방을 열었지만 읽지 못했을 때: 첫 화면 '처리할 문의'에 보이도록 실패한 문의로 남기고 카톡으로 알린다 (AI는 돌리지 않는다)
+  if (EXT_RUNNER && method === 'POST' && p === '/api/ext/failed') {
+    const b = await readJson(req, 16384);
+    const chatId = String(b.chatId ?? '');
+    const account = String(b.account ?? '');
+    if (!/^[\w-]{1,64}$/.test(chatId) || !/^\d{1,20}$/.test(account)) return send(res, 400, { error: '채팅방 번호나 계정 번호가 올바르지 않습니다.' });
+    const detail = String(b.error || '').slice(0, 200);
+    const reason = `새 채팅방을 읽지 못해 응대하지 못했습니다. 숨고에서 직접 확인해 주세요.${detail ? ` (${detail})` : ''}`;
+    const id = store.newId();
+    const at = new Date().toISOString();
+    await store.save({
+      id, createdAt: at, status: 'error', source: 'ext', soomgoId: null, kind: 'chat', chatId, account, title: '숨고 새 채팅방 (읽지 못함)',
+      messages: [], analysis: null, estimateInputs: null, draftReply: '', finalReply: null, finalPrice: null, error: reason,
+      booking: { date: null, note: null }, autoSend: { sent: false, reason, at }, log: [{ at, action: '숨고 새 채팅방을 읽지 못함', detail }],
+    });
+    await kakao.notify(`[숨고 채팅] ${reason}`, `/#/i/${id}`);
+    return send(res, 201, { id });
   }
   // 확장 파일 내려받기 (PC 크롬에 설치할 때). extension 폴더를 압축해서 바로 보낸다
   if (EXT_RUNNER && method === 'GET' && p === '/api/extension.zip') {
@@ -665,6 +694,8 @@ async function handle(req, res) {
     inq.messages.push({ at: new Date().toISOString(), from: 'owner', text: reply, images: [] });
     inq.status = 'sent';
     log('승인 후 복사', body.price ? `안내 금액: ${body.price}` : undefined);
+    // PC 크롬 확장이 아직 써 넣기 전이면, 사장님이 직접 보낸 것으로 정해 확장이 또 보내지 않게 한다
+    if (inq.extTask && !inq.autoSend) inq.autoSend = { sent: false, reason: '사장님이 직접 보냈습니다.', at: new Date().toISOString() };
     await store.save(inq);
     return send(res, 200, inq);
   }

@@ -3,8 +3,8 @@
 // 글과 사진을 서버로 보낸다. 서버의 AI가 첫 응대를 쓰면 그 탭의 채팅창에 써 넣는다(서버 설정이 '자동으로 보내기'면 전송까지).
 // 켜짐·꺼짐과 답장 방식은 서버(비서 사이트)의 설정을 따르고, 지금 상태를 서버에 알린다. 서버 주소는 비서 사이트를 열 때 site.js가 알려 준다.
 const CHATS_URL = 'https://soomgo.com/pro/chats';
-// 받아들이는 비서 사이트 주소
-const SERVER_RE = /^(https:\/\/ssakda\.sect\.kr|http:\/\/(localhost|127\.0\.0\.1)(:\d+)?)$/;
+// 받아들이는 비서 사이트 주소 (이 PC의 다른 프로그램이 비서 서버 행세를 하지 못하게 정해 둔다)
+const SERVER_RE = /^https:\/\/ssakda\.sect\.kr$/;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 지금 상태: off 꺼짐, starting 여는 중, login 숨고 로그인 필요, ok 정상, error 문제. work는 AI 비서가 지금 하는 일
@@ -13,8 +13,8 @@ const status = { state: 'off', message: '', lastCheck: null, lastNew: null, acco
 let busy = false;
 // 지금 답장을 쓰고 있는 채팅방 탭 (AI 비서가 하는 일을 그 탭에도 보여준다)
 let roomTabId = null;
-// 크롬이 이 확장을 잠시 쉬게 했다가 다시 깨우면, 마지막 상태를 이어받는다
-chrome.storage.local.get('status').then(({ status: saved }) => saved && Object.assign(status, saved, { work: '' }));
+// 크롬이 이 확장을 잠시 쉬게 했다가 다시 깨우면, 마지막 상태를 이어받는다. 다 읽기 전에는 확인을 시작하지 않는다
+const restored = chrome.storage.local.get('status').then(({ status: saved }) => saved && Object.assign(status, saved, { work: '' }));
 
 // ---------- 서버 ----------
 const serverUrl = async () => (await chrome.storage.local.get('server')).server || 'https://ssakda.sect.kr';
@@ -66,30 +66,37 @@ function waitLoaded(tabId, ms = 45000) {
     chrome.tabs.get(tabId).then((t) => t.status === 'complete' && done(), done);
   });
 }
-// 탭을 그 주소로 다시 불러온다
-async function navigate(tabId, url) {
-  const loaded = waitLoaded(tabId);
-  await chrome.tabs.update(tabId, { url });
-  await sleep(500);
-  await loaded;
+// 탭을 그 주소로 다시 불러오고, 새로 다 열릴 때까지 기다린다 (45초까지).
+// 이미 열려 있던 화면의 '다 열림'에 속지 않도록, 불러오기를 시킨 뒤에 오는 '다 열림'만 기다린다
+function navigate(tabId, url, ms = 45000) {
+  return new Promise((resolve) => {
+    const done = () => {
+      chrome.tabs.onUpdated.removeListener(on);
+      clearTimeout(timer);
+      resolve();
+    };
+    const on = (id, info) => id === tabId && info.status === 'complete' && done();
+    const timer = setTimeout(done, ms);
+    chrome.tabs.onUpdated.addListener(on);
+    chrome.tabs.update(tabId, { url }).catch(done);
+  });
 }
-// 숨고 탭의 content.js에 일을 시키고 결과를 받는다. 막 열린 탭이면 준비될 때까지 몇 번 더 해 본다
+// 숨고 탭의 content.js에 일을 시키고 결과를 받는다. 막 열린 탭이면 준비될 때까지 몇 번 더 해 본다 (10초까지)
 async function ask(tabId, msg) {
-  for (let i = 0; ; i++) {
-    try {
-      const r = await chrome.tabs.sendMessage(tabId, msg);
-      if (r) return r;
-    } catch (e) {
-      if (i >= 10) throw new Error('숨고 탭이 닫혔거나 응답하지 않습니다.');
-    }
+  for (let i = 0; i < 20; i++) {
+    const r = await chrome.tabs.sendMessage(tabId, msg).catch(() => null);
+    if (r) return r;
     await sleep(500);
   }
+  throw new Error('숨고 탭이 닫혔거나 응답하지 않습니다.');
 }
-// 로그인 화면(숨고 로그인, 또는 카카오·네이버 같은 숨고 밖의 로그인 창)인지. 그 화면에서는 사장님이 로그인 중일 수 있어 다시 불러오지 않는다
+// 로그인 화면(숨고 로그인, 또는 카카오·네이버·애플·구글 로그인 창)인지. 그 화면에서는 사장님이 로그인 중일 수 있어 다시 불러오지 않는다.
+// 빈 화면이나 오류 화면, 다른 사이트는 로그인 화면이 아니므로 채팅 목록으로 다시 불러온다
 function isLoginUrl(u) {
   try {
     const { hostname, pathname } = new URL(u);
-    return /\/(login|sign-?in|auth)/i.test(pathname) || !/(^|\.)soomgo\.com$/.test(hostname);
+    if (/(^|\.)soomgo\.com$/.test(hostname)) return /\/(login|sign-?in|auth)/i.test(pathname);
+    return /(^|\.)(kakao\.com|naver\.com|apple\.com|google\.com|facebook\.com)$/.test(hostname);
   } catch {
     return false;
   }
@@ -106,9 +113,12 @@ function showWork() {
 
 // ---------- 1분마다 하는 확인 ----------
 async function tick() {
+  await restored;
   if (busy) return console.log('[비서] 앞의 확인이 아직 도는 중이라 건너뜀');
   busy = true;
   console.log('[비서] 확인 시작');
+  // 크롬은 30초 동안 크롬 기능을 쓰지 않는 확장을 잠재운다. AI가 첫 응대를 쓰는 동안(30초를 넘기기도 한다) 잠들지 않게 20초마다 깨워 둔다
+  const keepAwake = setInterval(() => chrome.runtime.getPlatformInfo(), 20000);
   try {
     // 서버에 상태를 알리고 설정을 받는다. 꺼져 있으면 아무것도 하지 않는다
     let cfg;
@@ -145,6 +155,7 @@ async function tick() {
     console.log('[비서] 확인 중 오류', e.message);
     await report({ state: 'error', message: `숨고 확인 중 오류: ${e.message}`, work: '' }).catch(() => {});
   } finally {
+    clearInterval(keepAwake);
     busy = false;
     console.log('[비서] 확인 끝', status.state, status.message);
   }
@@ -172,6 +183,9 @@ async function handleRoom(listTab, chatId, account) {
       chrome.tabs.remove(tab.id).catch(() => {});
       return;
     }
+    // 그 사이 사장님이 직접 보냈으면(문의 화면의 '보낸 것으로 표시') 써 넣지 않는다
+    const latest = await api(`/api/inquiries/${id}`);
+    if (latest.autoSend || latest.status === 'sent') return;
     const sending = inq.extTask.mode === 'send';
     await report({ work: sending ? '답장을 보내는 중' : '채팅창에 답장을 쓰는 중' });
     const r = await ask(tab.id, { cmd: sending ? 'send' : 'fill', text: inq.extTask.reply });
@@ -183,9 +197,10 @@ async function handleRoom(listTab, chatId, account) {
     if (r.sent) setTimeout(() => chrome.tabs.remove(tab.id).catch(() => {}), 3000);
   } catch (e) {
     console.log('[비서] 채팅방 처리 실패', chatId, e.message);
-    // 실패해도 다음 채팅방은 계속한다. 문의를 만든 뒤에 실패했으면(탭이 닫힘 등) 서버에 사유를 남기고, 그 전이면 카톡으로 알린다
+    // 실패해도 다음 채팅방은 계속한다. 문의를 만든 뒤에 실패했으면(탭이 닫힘 등) 그 문의에 사유를 남기고,
+    // 그 전이면(채팅방을 읽지 못함) 첫 화면에 보이도록 '읽지 못한 채팅방'으로 남긴다
     if (inquiryId) await api(`/api/inquiries/${inquiryId}/typed`, { error: e.message }).catch(() => {});
-    else await api('/api/ext/status', { ...status, alert: `[숨고 채팅] 새 채팅방을 읽지 못해 응대하지 못했습니다. 숨고에서 직접 확인해 주세요.\n${e.message}` }).catch(() => {});
+    else await api('/api/ext/failed', { chatId, account, error: e.message }).catch(() => {});
   } finally {
     roomTabId = null;
     await report({ work: '' }).catch(() => {});
