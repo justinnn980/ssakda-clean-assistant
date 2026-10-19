@@ -14,13 +14,18 @@ let pollTimer = null;
 let focusCard = null; // 설정 화면을 열 때 바로 보여줄 칸
 // 견적 기능(숨고 받은 요청 확인, 예상 금액, 견적 보내기)을 보여줄지. 서버가 알려준다 (지금은 꺼 두고 숨겼다)
 let quoteFeatures = true;
-// 서버(사무실 맥북)에서 도는지. 서버에서는 숨고 탭을 새 창('숨고 창')으로 보여 주고, 노트북 전용 기능(밖에서 접속하기, 카톡 일감 잡기, 프로그램 끄기)을 숨긴다
+// 서버(사무실 맥북)에서 도는지. 서버에서는 노트북 전용 기능(밖에서 접속하기, 카톡 일감 잡기, 프로그램 끄기)을 숨기고,
+// 숨고 채팅은 PC 크롬의 '싹다클린 AI 비서' 확장이 맡는다
 let serverMode = false;
+// 서버에 있는 확장의 버전 (이 브라우저의 확장이 그와 다르면 업데이트하라고 알린다)
+let extLatest = '';
+// 이 브라우저에 설치된 확장의 버전. 없으면 빈 글 (확장의 site.js가 표시해 둔다)
+const extVersion = () => document.documentElement.dataset.ssakdaExt || '';
+// 확장에 일을 시킨다: start(켜기, 숨고 창을 띄움), stop(끄기), open(창 열기), show(그 채팅방 탭 보기)
+const extSend = (cmd, extra = {}) => window.postMessage({ source: 'ssakda-site', cmd, ...extra }, location.origin);
 // 서버와 노트북에서 다른 안내: 숨고에 로그인하는 곳, 숨고 확인이 멈췄을 때 볼 곳
-const loginWhere = () => (serverMode ? '"창 열기"를 눌러 숨고 창에서 로그인하면 바로 시작합니다.' : '노트북에 열린 크롬 창에서 로그인하면 바로 시작합니다.');
-const stallHint = () => (serverMode ? '"창 열기"를 눌러 숨고 창을 확인해 주세요.' : '노트북이 켜져 있는지, 숨고 크롬 창이 열려 있는지 확인해 주세요.');
-// 숨고 창(서버의 숨고를 실시간으로 보여주는 새 창)을 연다. 이미 열려 있으면 그 창을 앞으로 가져온다
-const openSoomgoWindow = (hash = '') => window.open(`/soomgo.html${hash}`, 'soomgo');
+const loginWhere = () => (serverMode ? 'PC 크롬에 열린 숨고 창에서 로그인하면 바로 시작합니다.' : '노트북에 열린 크롬 창에서 로그인하면 바로 시작합니다.');
+const stallHint = () => (serverMode ? 'PC가 켜져 있는지, 크롬과 숨고 창이 열려 있는지 확인해 주세요. <a href="#/guide">사용 안내</a>' : '노트북이 켜져 있는지, 숨고 크롬 창이 열려 있는지 확인해 주세요.');
 
 // 서버가 쓰는 영어 값을 화면에 보여줄 한글로 바꾸는 표: 문의 상태, 위험도, 필요 여부
 const STATUS = { analyzing: '분석 중', awaiting_owner: '승인 대기', sent: '전송 완료', on_hold: '보류', rejected: '거절', booked: '예약 확정', error: '분석 실패' };
@@ -139,13 +144,16 @@ const CHAT_MODE = { send: '자동으로 보내기', fill: '채팅창에 써 두�
 function chatLine(st) {
   const c = st.chat;
   if (!st.settings.chat) return '<span class="dot"></span>꺼져 있습니다. 숨고 채팅을 확인하지 않고 답장도 보내지 않습니다.';
+  // 서버에서는 PC 크롬 확장이 1분마다 연락한다. 3분 넘게 연락이 없으면 PC나 크롬이 꺼진 것이다
+  if (serverMode && !(c.seenAt && Date.now() - new Date(c.seenAt) < 3 * 60 * 1000))
+    return '<span class="dot bad"></span><span class="err">PC 크롬에서 비서가 동작하지 않고 있습니다.</span> 확장을 설치한 PC에서 크롬을 켜 두세요. <a href="#/guide">사용 안내</a>';
   if (c.state === 'login') return `<span class="dot wait"></span>숨고 로그인이 필요합니다. ${loginWhere()}`;
   if (c.state === 'error') return `<span class="dot bad"></span><span class="err">${esc(c.message)}</span>`;
   if (c.state !== 'ok' || !c.lastCheck) return '<span class="dot wait"></span>숨고 창을 여는 중입니다.';
   // 마지막 확인이 5분 넘게 지났으면 멈춘 것으로 보고 알린다
   if (Date.now() - new Date(c.lastCheck) > 5 * 60 * 1000)
     return `<span class="dot bad"></span><span class="err">숨고 채팅 확인이 ${when(c.lastCheck)} 이후 멈춰 있습니다. ${stallHint()}</span>`;
-  return `<span class="dot on"></span>숨고 채팅 확인 중 · 마지막 확인 ${when(c.lastCheck)}<br>${esc(c.message)}${c.lastNew ? ` · 마지막 새 채팅방 ${when(c.lastNew)}` : ''}`;
+  return `<span class="dot on"></span>${serverMode ? 'PC 크롬에서 ' : ''}숨고 채팅 확인 중 · 마지막 확인 ${when(c.lastCheck)}<br>${esc(c.work || c.message)}${c.lastNew ? ` · 마지막 새 채팅방 ${when(c.lastNew)}` : ''}`;
 }
 // 숨고 답변 보내는 방식의 화면 이름
 const QUOTE_MODE = { off: '직접 보내기 (승인 후 복사)', fill: '발송 직전까지 자동 (숨고 창에 써 두고 멈춤)', send: '자동 발송 (확인 없이 보냄)' };
@@ -183,11 +191,19 @@ async function renderList() {
           : '<span class="dot wait"></span>숨고 창을 여는 중입니다.';
   // 숨고 채팅 자동 응대 칸: 상태 한 줄, 답장 방식, 켜기·끄기 버튼
   const chatOn = st.settings.chat;
-  // 서버에서는 켜져 있을 때 '창 열기'로 숨고 창(AI 비서가 일하는 모습)을 다시 연다
+  // 서버에서는 켜져 있고 이 브라우저에 확장이 있으면 '창 열기'로 PC 크롬의 숨고 창을 앞에 띄운다. 확장이 없거나 옛 버전이면 알려 준다
+  const ext = extVersion();
+  const extNote = !serverMode
+    ? ''
+    : !ext
+      ? '<div class="muted">이 브라우저에는 비서 확장이 없습니다. 실제 응대는 확장을 설치한 PC 크롬에서 합니다. <a href="#/guide">사용 안내</a></div>'
+      : extLatest && ext !== extLatest
+        ? '<div class="err">확장 새 버전이 있습니다. <a href="#/guide">사용 안내</a>의 "확장 업데이트"를 따라 해 주세요.</div>'
+        : '';
   const chatNote = `<div class="card"><div class="setting"><div><h2>숨고 채팅 자동 응대</h2>
       <div class="muted">${chatLine(st)}</div>
-      ${chatOn ? `<div class="muted">새 채팅방이 생기면: ${CHAT_MODE[st.settings.chatMode]} <a href="#/settings" id="chatEdit">바꾸기</a></div>` : ''}</div>
-      <div class="btns">${serverMode && chatOn ? '<button class="btn primary" id="chatWin">창 열기</button>' : ''}<button class="btn ${chatOn ? 'danger' : 'primary'}" id="chatPower">${chatOn ? '끄기' : '켜기'}</button></div></div></div>`;
+      ${chatOn ? `<div class="muted">새 채팅방이 생기면: ${CHAT_MODE[st.settings.chatMode]} <a href="#/settings" id="chatEdit">바꾸기</a></div>` : ''}${extNote}</div>
+      <div class="btns">${serverMode && chatOn && ext ? '<button class="btn primary" id="chatWin">창 열기</button>' : ''}<button class="btn ${chatOn ? 'danger' : 'primary'}" id="chatPower">${chatOn ? '끄기' : '켜기'}</button></div></div></div>`;
   // 숨고 비서 칸: 상태 한 줄, 답변 보내는 방식, 켜기·끄기 버튼
   const soomgoNote = `<div class="card"><div class="setting"><div><h2>숨고 비서</h2>
       <div class="muted">${soomgoLine}</div>
@@ -243,13 +259,19 @@ async function renderList() {
     }
     renderList();
   };
-  // 숨고 채팅 자동 응대 켜기·끄기 버튼과, 답장 방식 '바꾸기'. 서버에서 켜면 숨고 창을 바로 연다 (누른 순간에 열어야 브라우저가 막지 않는다)
+  // 숨고 채팅 자동 응대 켜기·끄기 버튼과, 답장 방식 '바꾸기'. 서버에서는 이 브라우저의 확장에도 알려, 켜면 숨고 창을 바로 띄운다
   document.getElementById('chatPower').onclick = async (e) => {
-    if (serverMode && !chatOn) openSoomgoWindow();
     e.target.disabled = true;
     try {
       await api('/api/settings', { chat: !chatOn });
-      toast(chatOn ? '채팅 자동 응대를 껐습니다.' : serverMode ? '채팅 자동 응대를 켰습니다. 열린 숨고 창에서 로그인이 필요하면 해 주세요.' : '채팅 자동 응대를 켰습니다. 노트북의 크롬 창을 확인해 주세요.');
+      // 확장이 있는지는 누른 순간에 다시 본다 (확장이 화면보다 늦게 표시했을 수 있다)
+      if (serverMode && extVersion()) extSend(chatOn ? 'stop' : 'start');
+      toast(
+        chatOn ? '채팅 자동 응대를 껐습니다.'
+        : !serverMode ? '채팅 자동 응대를 켰습니다. 노트북의 크롬 창을 확인해 주세요.'
+        : extVersion() ? '켰습니다. 숨고 창이 열립니다. 로그인 화면이면 로그인해 주세요.'
+        : '켰습니다. 확장을 설치한 PC 크롬에서 1분 안에 시작합니다.',
+      );
     } catch (err) {
       toast(err.message);
     }
@@ -258,7 +280,7 @@ async function renderList() {
   const chatEdit = document.getElementById('chatEdit');
   if (chatEdit) chatEdit.onclick = () => (focusCard = 'chatCard');
   const chatWin = document.getElementById('chatWin');
-  if (chatWin) chatWin.onclick = () => openSoomgoWindow();
+  if (chatWin) chatWin.onclick = () => extSend('open');
   // 숨고 비서 켜기·끄기 버튼 (견적 기능을 숨기면 없다)
   if (quoteFeatures) document.getElementById('power').onclick = async (e) => {
     e.target.disabled = true;
@@ -562,7 +584,7 @@ function renderChatDetail(inq, thread) {
     <h2>${esc(inq.title)}</h2>
     <div><span class="badge state">${STATUS[inq.status]}</span></div>
     ${inq.autoSend ? `<p class="${inq.autoSend.sent || inq.autoSend.prepared ? 'muted' : 'err'}">${autoSendText(inq.autoSend, 'chat')}</p>` : ''}
-    ${serverMode && inq.autoSend?.prepared && !sent ? `<a class="btn small" href="/soomgo.html#chat=${encodeURIComponent(inq.chatId)}" target="soomgo">숨고 창에서 보기</a>` : ''}
+    ${serverMode && extVersion() && inq.autoSend?.prepared && !sent ? '<button class="btn small" id="showRoom">숨고 창에서 보기</button>' : ''}
     ${inq.error ? `<p class="err">최근 재작성 실패: ${esc(inq.error)}</p>` : ''}
   </div>
 
@@ -586,6 +608,9 @@ function renderChatDetail(inq, thread) {
 
   ${statusCard(inq)}`;
 
+  // 써 둔 채팅방 탭을 PC 크롬에서 앞에 띄운다 (서버에서, 확장이 있을 때)
+  const showRoom = document.getElementById('showRoom');
+  if (showRoom) showRoom.onclick = () => extSend('show', { chatId: inq.chatId });
   // 아직 보내지 않았으면 답장을 고칠 수 있고, 고친 내용은 0.8초 뒤 저장한다. '복사하고 보낸 것으로 표시'로 직접 보낸 것을 기록한다
   if (!sent) {
     const replyEl = document.getElementById('reply');
@@ -650,7 +675,7 @@ async function renderSettings() {
   // 화면에 그린다: 프로그램 상태와 버전 / 숨고 자동 확인 / 분석할 AI / 숨고 답변 보내는 방식 / 밖에서 접속하기 / 카톡 일감 잡기 / 카카오톡 알림 / 프로그램 끄기
   app.innerHTML = `
   <div class="card"><span class="dot on"></span><b>프로그램이 켜져 있습니다</b>
-    <p class="muted">${serverMode ? '사무실 서버에서 늘 켜져 있습니다. 휴대폰이나 컴퓨터를 꺼도 계속 동작합니다.' : '노트북이 켜져 있는 동안 계속 동작합니다. 노트북 덮개를 닫으면 멈춥니다.'}${st.version ? `<br>버전 ${esc(st.version)}` : ''}</p></div>
+    <p class="muted">${serverMode ? '비서 사이트와 AI는 사무실 서버에서 늘 켜져 있습니다. 숨고 채팅 응대는 확장을 설치한 PC의 크롬이 켜져 있을 때 합니다.' : '노트북이 켜져 있는 동안 계속 동작합니다. 노트북 덮개를 닫으면 멈춥니다.'}${st.version ? `<br>버전 ${esc(st.version)}` : ''}</p></div>
 
   <div class="card" id="chatCard">
     <div class="setting"><div><h2>숨고 채팅 자동 응대</h2>
@@ -659,9 +684,8 @@ async function renderSettings() {
     <div class="state-line">${chatLine(st)}</div>
     <label>새 채팅방에 답장하는 방식</label>
     <select id="chatMode">${Object.entries(CHAT_MODE).map(([k, v]) => `<option value="${k}" ${k === st.settings.chatMode ? 'selected' : ''}>${v}</option>`).join('')}</select>
-    ${serverMode ? '<p><button class="btn small" id="soomgoLogout">숨고 계정 바꾸기</button></p><p class="muted">숨고에서 로그아웃하고, 열리는 숨고 창에서 다른 계정으로 로그인합니다. 바꾼 계정에 이미 있던 채팅방에는 답하지 않습니다.</p>' : ''}
     <p class="muted">"자동으로 보내기"는 확인 없이 고객에게 바로 보냅니다. 채팅방마다 한 번만 보내고, 이미 직접 대화 중인 채팅방, 업무와 관계없는 요청, 연락처나 금액이 들어간 답장은 보내지 않고 사유를 남깁니다. 켜기 전에 있던 채팅방에는 보내지 않습니다.<br>
-    ${serverMode ? '"채팅창에 써 두고 멈춤"은 서버의 숨고 창에 답장을 써 두기만 합니다. 첫 화면의 "창 열기"로 숨고 창을 열어 확인하고 전송을 누르거나, 문의 화면에서 답장을 복사해 숨고 앱에서 보냅니다.' : '"채팅창에 써 두고 멈춤"은 노트북의 숨고 창에 새 탭을 열어 답장을 써 두기만 합니다.'}</p>
+    ${serverMode ? '"채팅창에 써 두고 멈춤"은 PC 크롬에 그 채팅방을 새 탭으로 열어 답장을 써 두기만 합니다. 확인하고 전송을 눌러 주세요.' : '"채팅창에 써 두고 멈춤"은 노트북의 숨고 창에 새 탭을 열어 답장을 써 두기만 합니다.'}</p>
   </div>
 
   <div class="card" ${quoteFeatures ? '' : 'hidden'}>
@@ -738,22 +762,10 @@ async function renderSettings() {
   };
   // 숨고 채팅 자동 응대 스위치. 노트북이 아닌 곳에서 켜면 크롬 창이 열린다는 것을 먼저 알린다
   document.getElementById('swChat').onchange = (e) => {
-    if (serverMode && e.target.checked) openSoomgoWindow();
-    change('chat', e.target, e.target.checked && !local && !serverMode ? '켜면 노트북에 크롬 창이 열립니다. 처음에는 노트북 앞에서 숨고에 로그인해야 합니다. 켤까요?' : '');
-  };
-  // 숨고 계정 바꾸기 (서버에서만): 숨고 창을 먼저 열고(누른 순간에 열어야 브라우저가 막지 않는다), 서버에서 숨고 로그인을 지운다
-  const logoutBtn = document.getElementById('soomgoLogout');
-  if (logoutBtn) logoutBtn.onclick = async () => {
-    if (!confirm('숨고에서 로그아웃하고 다른 계정으로 로그인할까요?')) return;
-    if (st.settings.chat) openSoomgoWindow();
-    logoutBtn.disabled = true;
-    try {
-      await api('/api/soomgo/logout', {});
-      toast(st.settings.chat ? '로그아웃했습니다. 숨고 창에서 새 계정으로 로그인해 주세요.' : '로그아웃했습니다. 채팅 자동 응대를 켜면 숨고 로그인 화면이 나옵니다.');
-    } catch (err) {
-      toast(err.message);
-    }
-    renderSettings();
+    const on = e.target.checked;
+    change('chat', e.target, on && !local && !serverMode ? '켜면 노트북에 크롬 창이 열립니다. 처음에는 노트북 앞에서 숨고에 로그인해야 합니다. 켤까요?' : '');
+    // 서버에서는 이 브라우저의 확장에도 알린다 (켜면 숨고 창이 뜬다)
+    if (serverMode && extVersion()) extSend(on ? 'start' : 'stop');
   };
   // 새 채팅방에 답장하는 방식을 바꿨을 때. '자동으로 보내기'는 확인 없이 고객에게 나간다는 것을 한 번 더 확인한다
   document.getElementById('chatMode').onchange = async (e) => {
@@ -829,6 +841,80 @@ async function renderSettings() {
   if (waiting) pollTimer = setInterval(() => location.hash === '#/settings' && !document.querySelector('.switch input:disabled') && renderSettings(), 4000);
 }
 
+// ---------- 사용 안내 (서버에서 돌 때) ----------
+// PC 크롬 확장을 설치하고 쓰는 방법. 이 브라우저에 확장이 있는지도 보여준다
+function renderGuide() {
+  clearInterval(pollTimer);
+  const ext = extVersion();
+  const extState = !ext
+    ? '<span class="dot wait"></span>이 브라우저에는 확장이 아직 없습니다. 아래 "처음 한 번"을 따라 설치해 주세요.'
+    : extLatest && ext !== extLatest
+      ? `<span class="dot bad"></span>확장이 설치되어 있지만 옛 버전(${esc(ext)})입니다. 아래 "확장 업데이트"를 따라 해 주세요.`
+      : `<span class="dot on"></span>이 브라우저에 확장이 설치되어 있습니다(버전 ${esc(ext)}).`;
+  app.innerHTML = `
+  <div class="card guide">
+    <h2>사용 안내</h2>
+    <div class="state-line">${extState}</div>
+  </div>
+
+  <div class="card guide">
+    <h2>이렇게 동작합니다</h2>
+    <ul>
+      <li>사장님 PC 크롬에 <b>싹다클린 AI 비서 확장</b>을 한 번 설치해 둡니다.</li>
+      <li>이 사이트 첫 화면에서 <b>켜기</b>를 누르면 PC 크롬에 숨고 창이 열립니다. 숨고 로그인은 평소처럼 그 창에서 직접 합니다.</li>
+      <li>1분마다 숨고 채팅 목록을 확인하고, 새 채팅방이 생기면 그 방을 새 탭으로 열어 AI가 첫 응대(확인할 것과 필요한 사진 요청)를 씁니다.</li>
+      <li>"채팅창에 써 두고 멈춤"이면 채팅창에 써 두기만 하고, 사장님이 읽어 보고 전송을 누릅니다. "자동으로 보내기"면 바로 보냅니다. 방식은 설정에서 바꿉니다.</li>
+      <li>켜기 전에 있던 채팅방, 이미 대화 중인 방, 업무와 관계없는 요청, 연락처나 금액이 들어간 답장은 보내지 않고 이유를 남깁니다.</li>
+      <li>PC와 크롬이 켜져 있어야 동작합니다. 휴대폰에서는 이 사이트로 상태를 보고 켜고 끌 수 있습니다.</li>
+    </ul>
+  </div>
+
+  <div class="card guide">
+    <h2>처음 한 번: 확장 설치 (PC 크롬에서)</h2>
+    <ol>
+      <li>아래 버튼을 눌러 확장 파일을 받습니다.<p><a class="btn primary" href="/api/extension.zip">확장 파일 받기</a></p></li>
+      <li>받은 <b>ssakda-extension.zip</b> 파일을 오른쪽 클릭하고 <b>압축 풀기</b>를 누릅니다(맥은 두 번 클릭). 같은 이름의 폴더가 생깁니다. 이 폴더는 지우지 말고 그대로 두세요.</li>
+      <li>크롬 주소창에 아래 주소를 붙여넣고 Enter를 누릅니다.<p><code>chrome://extensions</code> <button class="btn small" id="copyExt">주소 복사</button></p></li>
+      <li>오른쪽 위의 <b>개발자 모드</b> 스위치를 켭니다.</li>
+      <li>왼쪽 위의 <b>압축해제된 확장 프로그램을 로드합니다</b>를 누르고, 2번에서 생긴 폴더를 고릅니다.</li>
+      <li>크롬 오른쪽 위의 퍼즐 모양 아이콘을 누르고, <b>싹다클린 AI 비서</b> 옆의 핀을 누르면 아이콘이 늘 보입니다.</li>
+      <li>이 사이트를 새로고침해서 맨 위 상태가 "설치되어 있습니다"로 바뀌면 끝입니다.</li>
+    </ol>
+  </div>
+
+  <div class="card guide">
+    <h2>매일 쓰는 법</h2>
+    <ol>
+      <li>PC 크롬에서 이 사이트를 열고, 첫 화면의 <b>숨고 채팅 자동 응대</b>에서 <b>켜기</b>를 누릅니다. 이미 켜져 있으면 <b>창 열기</b>를 누릅니다.</li>
+      <li>숨고 창이 뜹니다. 로그인 화면이면 평소처럼 로그인합니다.</li>
+      <li>숨고 창은 닫지 말고 아래로 내려 두세요. 닫아도 1분 안에 작게 다시 열립니다.</li>
+      <li>숨고 창 아래쪽에 <b>싹다클린 AI 비서 · 새 채팅방을 기다리는 중</b>이 보이면 잘 되고 있는 것입니다.</li>
+      <li>새 채팅방이 생기면 그 방이 새 탭으로 열리고, 잠시 뒤 채팅창에 답장이 써집니다. 읽어 보고 전송을 눌러 주세요.</li>
+    </ol>
+  </div>
+
+  <div class="card guide">
+    <h2>문제가 생기면</h2>
+    <dl>
+      <dt>PC 크롬에서 비서가 동작하지 않고 있습니다</dt><dd>PC와 크롬이 켜져 있는지, chrome://extensions 에서 싹다클린 AI 비서가 켜져 있는지 확인해 주세요.</dd>
+      <dt>확장 아이콘에 빨간 느낌표</dt><dd>아이콘을 눌러 이유를 봅니다. "접속 비밀번호를 넣어 주세요"면 PC 크롬에서 이 사이트에 접속해 비밀번호를 한 번 넣어 주세요.</dd>
+      <dt>숨고 로그인이 필요합니다</dt><dd>숨고 창에서 로그인해 주세요. 창이 안 보이면 첫 화면의 창 열기를 누릅니다.</dd>
+      <dt>답장이 써지지 않았습니다</dt><dd>그 문의를 열면 보내지 않은 이유가 적혀 있습니다. 문의 화면의 답장을 복사해 직접 보내도 됩니다.</dd>
+    </dl>
+  </div>
+
+  <div class="card guide">
+    <h2>확장 업데이트</h2>
+    <p class="muted">비서가 바뀌어 확장도 새로 받아야 할 때는 첫 화면에 "확장 새 버전이 있습니다"가 뜹니다.</p>
+    <ol>
+      <li>위의 <b>확장 파일 받기</b>로 새 파일을 받습니다.</li>
+      <li>처음 설치한 폴더에 압축을 풀어 덮어씁니다.</li>
+      <li>chrome://extensions 에서 싹다클린 AI 비서의 <b>새로고침(↻)</b> 버튼을 누릅니다.</li>
+    </ol>
+  </div>`;
+  document.getElementById('copyExt').onclick = async () => toast((await copyText('chrome://extensions')) ? '복사했습니다. 크롬 주소창에 붙여넣어 주세요.' : '복사가 안 됩니다. 직접 입력해 주세요.');
+}
+
 // ---------- 시작 ----------
 // 주소 뒤의 # 부분을 보고 알맞은 화면을 그린다: #/i/번호는 문의 한 건, #/new는 새 문의, #/settings는 설정, 그 밖에는 목록
 async function route() {
@@ -839,6 +925,7 @@ async function route() {
     if (h.startsWith('#/i/')) await renderDetail(h.slice(4));
     else if (h === '#/new') renderNew();
     else if (h === '#/settings') await renderSettings();
+    else if (h === '#/guide') renderGuide();
     else await renderList();
     // 화면 맨 위로 올리고, 바로 보여줄 칸이 정해져 있으면 그 칸으로 내려간다
     window.scrollTo(0, 0);
@@ -860,6 +947,9 @@ async function boot() {
     quoteFeatures = state.quoteFeatures !== false;
     document.getElementById('newBtn').hidden = !quoteFeatures;
     serverMode = Boolean(state.serverMode);
+    extLatest = state.extLatest || '';
+    // 서버에서 돌면 맨 위에 '안내' 버튼을 보여준다
+    document.getElementById('guideBtn').hidden = !serverMode;
     route();
   } catch {
     // 로그인 화면이 이미 표시됨

@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "싹다클린 AI 비서",
+  "version": "0.1.0",
+  "description": "숨고 새 채팅방에 AI 비서가 첫 응대를 써 줍니다. 싹다클린 AI 비서 사이트와 함께 씁니다.",
+  "permissions": ["tabs", "alarms", "storage"],
+  "host_permissions": ["https://soomgo.com/*", "https://*.soomgo.com/*", "https://ssakda.sect.kr/*", "http://localhost/*", "http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "싹다클린 AI 비서", "default_popup": "popup.html" },
+  "content_scripts": [
+    { "matches": ["https://soomgo.com/*"], "js": ["hook.js"], "run_at": "document_start", "world": "MAIN" },
+    { "matches": ["https://soomgo.com/*"], "js": ["content.js"], "run_at": "document_start" },
+    { "matches": ["https://ssakda.sect.kr/*", "http://localhost/*", "http://127.0.0.1/*"], "js": ["site.js"], "run_at": "document_start" }
+  ]
+}

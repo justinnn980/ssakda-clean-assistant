@@ -95,6 +95,13 @@ details summary { cursor: pointer; font-weight: 600; }
 .switch input:checked + span { background: var(--brand); }
 .switch input:checked + span::after { transform: translateX(24px); }
 .switch input:focus-visible + span { outline: 2px solid var(--text); outline-offset: 2px; }
+/* 사용 안내: 번호 목록과 주소 글자 */
+.guide ol, .guide ul { margin: 0; padding-left: 22px; }
+.guide li { margin-bottom: 8px; }
+.guide li p { margin: 8px 0 0; }
+.guide dl { grid-template-columns: 1fr; gap: 2px; }
+.guide dd { margin-bottom: 10px; }
+code { padding: 2px 6px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); font-size: 14px; }
 /* 상태를 알려주는 한 줄 */
 .state-line { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg); font-size: 14px; overflow-wrap: anywhere; }
 /* 상태 점: 회색 꺼짐, 초록 정상, 주황 기다리는 중, 빨강 문제 */

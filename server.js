@@ -71,9 +71,13 @@ const cfg = JSON.parse(readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
 // 코드는 남겨 두었으니 true로 바꾸면 다시 쓸 수 있다
 const QUOTE_FEATURES = false;
 // 서버(사무실 맥북)에서 돌리는지. 서버의 실행 설정(launchd)이 SERVER_MODE=1을 넣어 준다.
-// 서버에는 크롬 창을 띄울 화면이 없어서 숨고 탭을 비서 웹의 새 창('숨고 창')에 실시간으로 보여 준다. 노트북에서만 되는 기능(밖에서 접속하기 스위치, 카톡 일감 잡기, 프로그램 끄기)은 쓰지 않는다.
-// 밖에서 접속하는 주소는 서버의 터널이 맡고, .env의 BASE_URL에 적어 둔다
+// 노트북에서만 되는 기능(밖에서 접속하기 스위치, 카톡 일감 잡기, 프로그램 끄기)은 쓰지 않는다. 밖에서 접속하는 주소는 서버의 터널이 맡고, .env의 BASE_URL에 적어 둔다
 const SERVER_MODE = process.env.SERVER_MODE === '1';
+// 서버에서는 숨고 채팅을 사장님 PC 크롬의 '싹다클린 AI 비서' 확장(extension 폴더)이 맡는다(2026-10-19 사용자 결정). 서버는 숨고 크롬을 띄우지 않는다.
+// 확장이 숨고 창을 띄워 새 채팅방을 열고 그 글을 보내면(/api/ext/...), 서버가 AI로 첫 응대를 써 두고, 확장이 가져가 그 채팅방에 써 넣거나 보낸다
+const EXT_RUNNER = SERVER_MODE;
+// 확장이 마지막으로 알려 준 상태(숨고 채팅 칸에 보여 준다). seenAt은 확장이 마지막으로 연락한 시각이라, 오래되면 PC 크롬이 꺼진 것이다
+let extStatus = { state: 'off', message: '', lastCheck: null, lastNew: null, account: null, work: '', seenAt: null };
 
 // ---------- 분석 대기열 (한 번에 한 건씩) ----------
 // 앞의 분석이 끝나야 다음 분석이 시작되도록 줄을 세우는 변수. 처음에는 '이미 끝난 일'로 시작한다
@@ -194,9 +198,6 @@ async function autoFill(inq, analysis, range) {
 // 채팅방 한 건의 첫 응대를 만든다: AI가 채팅방 화면을 보고 확인할 것과 사진을 요청하는 답장을 씀 → (설정에 따라) 숨고 채팅에 보내거나 써 둠 → 카톡 알림
 async function runChatReply(inq) {
   const id = inq.id;
-  // 숨고 창 아래쪽 줄에 AI 비서가 하는 일과, 끝나면 그 결과를 보여준다
-  soomgo.chatStatus.work = 'AI 비서가 새 채팅방의 첫 응대를 쓰는 중입니다.';
-  const done = (text) => Object.assign(soomgo.chatStatus, { work: '', done: { at: new Date().toISOString(), text } });
   try {
     const result = await analyze(inq, store.inquiryDir(id), settings.ai, 'chat');
     // 분석하는 동안 화면에서 문의가 바뀌었을 수 있어 다시 읽은 뒤 결과를 붙인다
@@ -207,14 +208,16 @@ async function runChatReply(inq) {
     inq.status = 'awaiting_owner';
     inq.error = null;
     inq.log.push({ at: new Date().toISOString(), action: 'AI 첫 응대 작성' });
-    // 아직 보내기를 시도한 적이 없을 때만 보낸다 (채팅방마다 한 번)
-    if (!inq.autoSend) await chatAutoReply(inq, result);
+    // 아직 보내기를 시도한 적이 없을 때만 보낸다 (채팅방마다 한 번). PC 크롬 확장이 가져온 채팅방이면 확장이 써 넣도록 남겨 둔다
+    if (!inq.autoSend) {
+      if (inq.source === 'ext') planExtReply(inq, result);
+      else await chatAutoReply(inq, result);
+    }
     await store.save(inq);
+    // 확장이 써 넣기를 기다리는 중이면 알림은 확장이 결과를 알려 준 뒤에 보낸다
+    if (!inq.autoSend) return;
     // 카톡 알림: 보냄 / 써 둠 / 보내지 않은 사유
-    const a = inq.autoSend;
-    const outcome = a.sent ? '첫 응대를 보냈습니다.' : a.prepared ? a.reason : `보내지 않았습니다: ${a.reason}`;
-    done(`${inq.title} · ${outcome}`);
-    await kakao.notify(`[숨고 채팅] ${inq.title}\n${outcome}`, `/#/i/${id}`);
+    await notifyChatOutcome(inq);
   } catch (e) {
     // AI가 실패하면 보내지 않고, 사유를 남긴 뒤 카톡으로 알린다
     inq = await store.load(id);
@@ -222,7 +225,6 @@ async function runChatReply(inq) {
     inq.error = e.message;
     inq.log.push({ at: new Date().toISOString(), action: '첫 응대 작성 실패', detail: e.message });
     await store.save(inq);
-    done(`${inq.title} · 첫 응대를 만들지 못했습니다.`);
     await kakao.notify(`[숨고 채팅] 첫 응대를 만들지 못했습니다: ${inq.title}\n${e.message}`, `/#/i/${id}`);
   }
 }
@@ -239,32 +241,53 @@ function replyProblem(text) {
   return '';
 }
 
+// 채팅 첫 응대의 결과를 카톡으로 알린다: 보냄 / 써 둠 / 보내지 않은 사유
+async function notifyChatOutcome(inq) {
+  const a = inq.autoSend;
+  const outcome = a.sent ? '첫 응대를 보냈습니다.' : a.prepared ? a.reason : `보내지 않았습니다: ${a.reason}`;
+  await kakao.notify(`[숨고 채팅] ${inq.title}\n${outcome}`, `/#/i/${inq.id}`);
+}
+
+// 첫 응대를 보내지 않기로 하고 그 사유를 문의에 남긴다
+function skipChat(inq, reason) {
+  const at = new Date().toISOString();
+  inq.autoSend = { sent: false, reason, at };
+  inq.log.push({ at, action: '자동 응대 안 함', detail: reason });
+}
+
+// AI가 쓴 첫 응대를 보내면 안 되는 사유. 보내도 되면 빈 글
+function chatSkipReason(result) {
+  // AI가 보내지 않는 게 좋다고 본 경우 (이미 대화 중, 업무가 아닌 요청 등)
+  if (!result.send) return result.skip_reason || 'AI가 보내지 않는 것이 좋다고 판단했습니다.';
+  // 답장에 연락처·금액 같은 것이 들어 있으면 보내지 않는다
+  const problem = replyProblem(result.reply);
+  return problem ? `${problem} 내용을 확인한 뒤 직접 보내주세요.` : '';
+}
+
+// PC 크롬 확장이 가져온 채팅방: 보내도 되는 답장이면 확장이 가져가 설정한 방식대로 써 넣도록 남겨 두고(extTask), 아니면 사유를 남긴다
+function planExtReply(inq, result) {
+  const reason = chatSkipReason(result);
+  if (reason) return skipChat(inq, reason);
+  inq.extTask = { mode: settings.chatMode, reply: result.reply.trim(), at: new Date().toISOString() };
+}
+
 // 설정한 방식대로 채팅방에 답장을 보내거나 써 둔다. 한 채팅방에 한 번만 시도하고, 보내지 않았으면 그 사유를 남긴다.
 async function chatAutoReply(inq, result) {
   const at = new Date().toISOString();
-  // 보내지 않기로 했을 때 그 사유를 문의에 남기는 작은 함수
-  const skip = (reason) => {
-    inq.autoSend = { sent: false, reason, at };
-    inq.log.push({ at, action: '자동 응대 안 함', detail: reason });
-  };
-  // AI가 보내지 않는 게 좋다고 본 경우 (이미 대화 중, 업무가 아닌 요청 등)
-  if (!result.send) return skip(result.skip_reason || 'AI가 보내지 않는 것이 좋다고 판단했습니다.');
-  // 답장에 연락처·금액 같은 것이 들어 있으면 보내지 않는다
-  const problem = replyProblem(result.reply);
-  if (problem) return skip(`${problem} 내용을 확인한 뒤 직접 보내주세요.`);
+  const skip = (reason) => skipChat(inq, reason);
+  const reason = chatSkipReason(result);
+  if (reason) return skip(reason);
   // 그 사이 숨고에 다른 계정으로 로그인했으면 보내지 않는다
   if (soomgo.chatStatus.account !== inq.account) return skip('숨고에 로그인한 계정이 바뀌어 보내지 않았습니다.');
   const reply = result.reply.trim();
   // 써 두기만 하는 방식: 노트북의 숨고 창에 새 탭을 열어 채팅창에 써 둔다
-  soomgo.chatStatus.work = settings.chatMode === 'fill' ? 'AI 비서가 채팅창에 답장을 쓰는 중입니다.' : 'AI 비서가 답장을 보내는 중입니다.';
   if (settings.chatMode === 'fill') {
     try {
       await soomgo.prepareChat(inq.chatId, reply);
     } catch (e) {
       return skip(`숨고 채팅창에 써 두지 못했습니다. ${e.message.split('\n')[0]}`);
     }
-    const where = SERVER_MODE ? '"숨고 창"에서 ' : '';
-    inq.autoSend = { sent: false, prepared: true, reason: `숨고 채팅창에 답장을 써 두었습니다. ${where}확인하고 전송을 눌러주세요.`, at };
+    inq.autoSend = { sent: false, prepared: true, reason: '숨고 채팅창에 답장을 써 두었습니다. 확인하고 전송을 눌러주세요.', at };
     inq.log.push({ at, action: '숨고 채팅창에 답장을 써 둠' });
     return;
   }
@@ -284,8 +307,8 @@ async function chatAutoReply(inq, result) {
 }
 
 // 새 문의를 만든다: 번호를 정하고, 사진을 저장하고, 문의 파일을 만든 뒤 분석 줄에 세운다.
-// 숨고 채팅방에서 온 것(chatId)이면 채팅방 화면 글과 그때 로그인한 계정 번호(account)를 함께 저장한다
-async function createInquiry({ text, images, soomgoId = null, chatId = null, account = null }) {
+// 숨고 채팅방에서 온 것(chatId)이면 채팅방 화면 글과 그때 로그인한 계정 번호(account)를 함께 저장한다. PC 크롬 확장이 가져온 것은 source가 'ext'다
+async function createInquiry({ text, images, soomgoId = null, chatId = null, account = null, source = 'soomgo' }) {
   // 날짜·시각으로 된 새 문의 번호
   const id = store.newId();
   // 올라온 사진을 문의 폴더에 저장하고 파일 이름을 받는다
@@ -293,7 +316,7 @@ async function createInquiry({ text, images, soomgoId = null, chatId = null, acc
   const now = new Date().toISOString();
   // 문의의 처음 모습을 저장한다: 상태는 '분석 중', 첫 글은 고객 문의(채팅방이면 채팅방 화면 글)
   await store.save({
-    id, createdAt: now, status: 'analyzing', source: 'soomgo', soomgoId, kind: chatId ? 'chat' : 'quote', chatId, account,
+    id, createdAt: now, status: 'analyzing', source, soomgoId, kind: chatId ? 'chat' : 'quote', chatId, account,
     title: chatId ? '숨고 새 채팅방' : soomgoId ? '숨고 새 요청서' : text.slice(0, 30) || '새 문의',
     messages: [{ at: now, from: chatId ? 'room' : 'customer', text, images: files }],
     analysis: null, estimateInputs: null, draftReply: '', finalReply: null, finalPrice: null, error: null,
@@ -303,6 +326,39 @@ async function createInquiry({ text, images, soomgoId = null, chatId = null, acc
   // 분석 줄에 세우고, 문의 번호를 돌려준다
   enqueueAnalysis(id);
   return id;
+}
+
+// ---------- PC 크롬 확장이 본 채팅방 ----------
+// 계정마다 이미 본 채팅방 번호 ({ 계정 번호: [채팅방 번호, ...] }). 노트북에서 켤 때 lib/soomgo.js가 쓰는 것과 같은 파일이다
+const CHATS_SEEN_FILE = path.join(store.DATA_DIR, 'soomgo_chats_seen.json');
+// 한 번에 하나씩 처리하려고 줄을 세운다 (PC 두 대가 동시에 물어도 같은 채팅방을 두 번 넘기지 않게)
+let claiming = Promise.resolve();
+// 확장이 읽은 채팅 목록(위가 최근)에서 처음 보는 채팅방을 위에서 3개까지 골라, 넘기기 전에 본 것으로 적어 두고 오래된 것부터 돌려준다.
+// 그 계정을 처음 보면 지금 있는 채팅방을 모두 본 것으로 적고 아무것도 넘기지 않는다(예전 채팅방에는 답하지 않는다).
+// 목록을 제대로 읽지 못했으면(채팅방이 있다는데 번호가 없음) 기록하지 않는다. 빈 목록을 기록하면 나중에 예전 채팅방에 모두 답하게 된다
+function claimChats(account, ids, count) {
+  const run = async () => {
+    if (!/^\d{1,20}$/.test(account)) throw Object.assign(new Error('숨고 계정 번호가 올바르지 않습니다.'), { status: 400 });
+    const list = (Array.isArray(ids) ? ids : []).map(String).filter((x) => /^[\w-]{1,64}$/.test(x)).slice(0, 500);
+    if (!Number.isInteger(count) || count < 0 || (count > 0 && !list.length)) throw Object.assign(new Error('채팅 목록을 제대로 읽지 못했습니다.'), { status: 400 });
+    let all = {};
+    try {
+      all = JSON.parse(await readFile(CHATS_SEEN_FILE, 'utf8'));
+    } catch {
+      // 처음이면 빈 기록에서 시작한다
+    }
+    const first = !all[account];
+    const seen = all[account] || [...list];
+    const fresh = first ? [] : list.filter((x) => !seen.includes(x)).slice(0, 3);
+    seen.push(...fresh);
+    all[account] = seen.slice(-2000);
+    await writeFile(CHATS_SEEN_FILE, JSON.stringify(all));
+    if (first) console.log(`[숨고 채팅] 계정 ${account}을 처음 확인했습니다. 지금 있는 채팅방 ${list.length}개는 응대하지 않습니다.`);
+    return fresh.reverse();
+  };
+  const job = claiming.then(run);
+  claiming = job.catch(() => {});
+  return job;
 }
 
 // ---------- HTTP 도우미 ----------
@@ -452,23 +508,45 @@ async function handle(req, res) {
     }
   }
 
-  // --- 숨고 창 (서버에서만): 숨고 탭을 실시간으로 보내는 연결(창 크기와, 먼저 볼 채팅방을 받는다), 창에서 한 동작(누르기·밀기·글자) ---
-  if (SERVER_MODE && method === 'GET' && p === '/api/soomgo/stream') {
-    const q = url.searchParams;
-    return soomgo.openViewer(req, res, { w: q.get('w'), h: q.get('h'), dpr: q.get('dpr'), chat: q.get('chat') || '' });
+  // --- PC 크롬 확장 (서버에서만) ---
+  // 확장이 1분마다 지금 상태를 알려 주고, 채팅 자동 응대를 켜 두었는지와 답장 방식을 받아 간다. 숨고 로그인이 풀렸으면 카톡으로 한 번 알린다
+  if (EXT_RUNNER && method === 'POST' && p === '/api/ext/status') {
+    const b = await readJson(req, 16384);
+    const text = (v, n) => String(v ?? '').slice(0, n);
+    const next = {
+      state: ['off', 'starting', 'login', 'ok', 'error'].includes(b.state) ? b.state : 'error',
+      message: text(b.message, 300), work: text(b.work, 200), account: /^\d{1,20}$/.test(b.account) ? b.account : null,
+      lastCheck: b.lastCheck ? text(b.lastCheck, 40) : null, lastNew: b.lastNew ? text(b.lastNew, 40) : null, seenAt: new Date().toISOString(),
+    };
+    if (next.state === 'login' && extStatus.state !== 'login') kakao.notify('[숨고 채팅] 숨고 로그인이 필요합니다. PC 크롬에 열린 숨고 창에서 로그인해 주세요.');
+    // 확장이 따로 알려 달라고 한 일(새 채팅방을 읽지 못함 등)
+    if (b.alert) kakao.notify(text(b.alert, 300));
+    extStatus = next;
+    return send(res, 200, { chat: settings.chat, chatMode: settings.chatMode });
   }
-  if (SERVER_MODE && method === 'POST' && p === '/api/soomgo/input') {
-    await soomgo.viewerInput(await readJson(req, 16384));
-    return send(res, 200, { ok: true });
+  // 확장이 읽은 채팅 목록을 받아, 처음 보는 채팅방을 본 것으로 적고 돌려준다
+  if (EXT_RUNNER && method === 'POST' && p === '/api/ext/claim') {
+    const b = await readJson(req, 65536);
+    return send(res, 200, { fresh: await claimChats(String(b.account ?? ''), b.ids, b.count) });
   }
-  // --- 숨고 계정 바꾸기 (서버에서만): 숨고 확인을 멈추고, 숨고 로그인을 지운 뒤, 켜져 있던 것은 다시 켠다(숨고 로그인 화면이 나온다) ---
-  if (SERVER_MODE && method === 'POST' && p === '/api/soomgo/logout') {
-    await soomgo.stopChatWatcher();
-    await soomgo.stopWatcher();
-    await soomgo.forgetLogin();
-    if (settings.chat) startChat();
-    if (settings.soomgo && QUOTE_FEATURES) startSoomgo();
-    return send(res, 200, { ok: true });
+  // 확장이 연 새 채팅방의 글과 사진을 받아 문의로 등록한다. AI가 첫 응대를 쓰면 확장이 문의를 다시 읽어 가져간다
+  if (EXT_RUNNER && method === 'POST' && p === '/api/ext/room') {
+    const b = await readJson(req);
+    const chatId = String(b.chatId ?? '');
+    const account = String(b.account ?? '');
+    if (!/^[\w-]{1,64}$/.test(chatId) || !/^\d{1,20}$/.test(account)) return send(res, 400, { error: '채팅방 번호나 계정 번호가 올바르지 않습니다.' });
+    if (!settings.chat) return send(res, 409, { error: '채팅 자동 응대가 꺼져 있습니다.' });
+    const text = `[숨고 채팅방 화면]\n${String(b.text || '').trim()}`.slice(0, 12000);
+    const images = (Array.isArray(b.images) ? b.images : []).slice(0, 6);
+    return send(res, 201, { id: await createInquiry({ text, images, chatId, account, source: 'ext' }) });
+  }
+  // 확장 파일 내려받기 (PC 크롬에 설치할 때). extension 폴더를 압축해서 바로 보낸다
+  if (EXT_RUNNER && method === 'GET' && p === '/api/extension.zip') {
+    res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="ssakda-extension.zip"', 'Cache-Control': 'no-store' });
+    const zip = spawn('zip', ['-r', '-q', '-X', '-', '.'], { cwd: path.join(ROOT, 'extension') });
+    zip.stdout.pipe(res);
+    zip.on('error', () => res.end());
+    return;
   }
 
   // --- 프로그램 끄기: 먼저 답을 보내고 0.3초 뒤에 끈다. 서버에서는 끄지 않는다(꺼도 저절로 다시 켜진다) ---
@@ -541,6 +619,28 @@ async function handle(req, res) {
     await store.save(inq);
     enqueueAnalysis(id);
     return send(res, 200, inq);
+  }
+
+  // PC 크롬 확장이 첫 응대를 써 넣거나 보낸 결과. 채팅방마다 한 번만 받는다
+  if (action === 'typed') {
+    if (!inq.extTask || inq.autoSend) return send(res, 409, { error: '이미 처리한 채팅방입니다.' });
+    const at = new Date().toISOString();
+    const { reply } = inq.extTask;
+    if (body.sent) {
+      inq.autoSend = { sent: true, at };
+      inq.finalReply = inq.draftReply = reply;
+      inq.messages.push({ at, from: 'owner', text: reply, images: [] });
+      inq.status = 'sent';
+      log('숨고 채팅에 첫 응대를 자동으로 보냄 (PC 크롬)');
+    } else if (body.prepared) {
+      inq.autoSend = { sent: false, prepared: true, reason: body.note ? String(body.note).slice(0, 200) : '숨고 채팅창에 답장을 써 두었습니다. PC 크롬의 숨고 창에서 확인하고 전송을 눌러주세요.', at };
+      log('숨고 채팅창에 답장을 써 둠 (PC 크롬)');
+    } else {
+      skipChat(inq, `보내지 못했습니다. ${String(body.error || '').slice(0, 200)}`.trim());
+    }
+    await store.save(inq);
+    await notifyChatOutcome(inq);
+    return send(res, 200, { ok: true });
   }
 
   // 화면에서 고친 견적 입력값·답변을 저장한다
@@ -742,7 +842,8 @@ async function applySettings(next) {
   // 숨고 채팅 자동 응대 스위치와 답장 방식. 켜면 크롬 창을 열고, 끄면(받은 요청 확인도 꺼져 있으면) 닫는다
   if (typeof next.chat === 'boolean' && next.chat !== settings.chat) {
     settings.chat = next.chat;
-    next.chat ? startChat() : await soomgo.stopChatWatcher();
+    // 확장이 맡을 때는 스위치만 바꾼다 (확장이 1분 안에 받아 간다)
+    if (!EXT_RUNNER) next.chat ? startChat() : await soomgo.stopChatWatcher();
   }
   if (['send', 'fill'].includes(next.chatMode)) settings.chatMode = next.chatMode;
   // 숨고 비서(받은 요청 확인) 스위치. 견적 기능을 끈 동안에는 바꾸지 않는다
@@ -773,6 +874,13 @@ async function applySettings(next) {
   await writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
 
+// 서버에 있는 확장(extension 폴더)의 버전. 사장님 PC의 확장이 이와 다르면 화면에서 업데이트하라고 알린다
+let extLatest = '';
+try {
+  extLatest = JSON.parse(readFileSync(path.join(ROOT, 'extension', 'manifest.json'), 'utf8')).version;
+} catch {
+  // 확장 폴더가 없으면 알리지 않는다
+}
 // 지금 돌고 있는 버전(마지막으로 받은 변경). 업데이트가 적용됐는지 설정 화면에서 확인하는 데 쓴다.
 let version = '';
 try {
@@ -780,8 +888,9 @@ try {
 } catch {
   // git이 없거나 내려받은 폴더가 아니면 표시하지 않는다
 }
-// 화면에 보여줄 지금 상태를 한데 모은다: 설정, 버전, 견적 기능을 보여줄지, 서버에서 도는지, 외부 접속 주소와 안내, 숨고 상태, 숨고 채팅 상태, 카톡 상태
-const featureState = () => ({ settings, version, quoteFeatures: QUOTE_FEATURES, serverMode: SERVER_MODE, tunnelUrl: tunnel.url, tunnelNote: tunnel.note, soomgo: soomgo.status, chat: soomgo.chatStatus, talk: kakaotalk.status });
+// 화면에 보여줄 지금 상태를 한데 모은다: 설정, 버전, 견적 기능을 보여줄지, 서버에서 도는지, 확장이 맡는지, 외부 접속 주소와 안내, 숨고 상태, 숨고 채팅 상태, 카톡 상태
+// 확장이 맡을 때 숨고 채팅 상태는 확장이 알려 준 것이고, extRunner로 화면에 알린다
+const featureState = () => ({ settings, version, quoteFeatures: QUOTE_FEATURES, serverMode: SERVER_MODE, extRunner: EXT_RUNNER, extLatest, tunnelUrl: tunnel.url, tunnelNote: tunnel.note, soomgo: soomgo.status, chat: EXT_RUNNER ? extStatus : soomgo.chatStatus, talk: kakaotalk.status });
 
 // 서버의 프로세스 번호를 적어 두는 파일. stop.sh가 이 번호로 프로그램을 끈다
 const PID_FILE = path.join(store.DATA_DIR, 'server.pid');
@@ -827,6 +936,6 @@ server.listen(PORT, process.env.HOST || '0.0.0.0', async () => {
   // 지난번에 켜 두었던 기능들을 다시 켠다 (서버에서는 노트북 전용 기능을 빼고)
   if (settings.tunnel && PIN.length >= 8 && !SERVER_MODE) startTunnel();
   if (settings.soomgo && QUOTE_FEATURES) startSoomgo();
-  if (settings.chat) startChat();
+  if (settings.chat && !EXT_RUNNER) startChat();
   if (settings.kakaoWatch && !SERVER_MODE) kakaotalk.start(settings.talk);
 });

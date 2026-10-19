@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+<!-- 크롬 오른쪽 위의 확장 아이콘을 누르면 뜨는 작은 창: 지금 상태와 숨고 창 열기, 비서 사이트 열기 -->
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 280px; margin: 0; padding: 14px; font: 14px/1.5 -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; color: #17201e; }
+  h1 { font-size: 15px; margin: 0 0 8px; }
+  #state { padding: 10px 12px; border-radius: 10px; background: #f4f6f5; margin-bottom: 10px; overflow-wrap: anywhere; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: #64706d; }
+  .dot.on { background: #15803d; } .dot.wait { background: #b45309; } .dot.bad { background: #b91c1c; }
+  button { display: block; width: 100%; margin-top: 6px; padding: 10px; border: 1px solid #dfe5e3; border-radius: 10px; background: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+  button.primary { background: #0f766e; border-color: #0f766e; color: #fff; }
+</style>
+</head>
+<body>
+<h1>싹다클린 AI 비서</h1>
+<div id="state">상태를 불러오는 중입니다.</div>
+<button class="primary" id="open">숨고 창 열기</button>
+<button id="site">비서 사이트 열기</button>
+<script src="popup.js"></script>
+</body>
+</html>
