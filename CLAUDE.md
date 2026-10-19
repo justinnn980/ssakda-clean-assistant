@@ -46,7 +46,7 @@
 
 - 2026-10-19 사용자 결정: 사무실 서버 맥북(`ssh infraserver`, pyoing.cloud가 도는 서버)에서 돌린다. PC에 설치하면 문제가 많아서, PC에는 아무것도 설치하지 않고 https://ssakda.sect.kr 에 접속만 한다. 서버는 화면 로그인 없이 서비스만 돈다.
 - 사용자가 원하는 흐름(2026-10-19): PC 브라우저에서 '켜기'를 누르면 숨고 창(새 창)이 뜬다 → 로그인이 필요하면 그 창에서 한다 → AI 비서가 그 창에서 채팅 목록을 보고 새 채팅방에 들어가 응대하는 모습이 보인다. 창을 닫아도 AI는 서버에서 계속 일하고, 첫 화면의 '창 열기'로 다시 연다. 웹사이트가 PC 브라우저의 숨고 창을 직접 조종하는 것은 브라우저 보안상 안 되므로, 숨고 크롬과 AI는 서버에서 돌고 숨고 창은 그것을 실시간으로 보여 준다(PC에서 진짜 숨고 창을 쓰려면 크롬 확장 설치가 필요하다).
-- AI는 일단 Claude로 한다(2026-10-19 사용자 결정). 서버에 Claude Code를 npm으로 설치했다. 서버는 키체인을 못 쓰므로 로그인은 `ssh -t infraserver apps/_ops/ssakda/claude-login.sh`로 오래 쓰는 표를 받아 `.env`의 `CLAUDE_CODE_OAUTH_TOKEN`에 넣는다(표는 사용자 터미널에서만 다룬다).
+- AI는 일단 Claude로 한다(2026-10-19 사용자 결정). 서버에 Claude Code를 npm으로 설치했다. 서버는 키체인을 못 쓰므로 로그인은 `ssh -t infraserver apps/_ops/ssakda/claude-login.sh`로 오래 쓰는 표를 받아 `.env`의 `CLAUDE_CODE_OAUTH_TOKEN`에 넣는다(표는 사용자 터미널에서만 다룬다). 표(약 108자)가 터미널에서 두 줄로 꺾여 복사가 잘린 적이 있어, 스크립트가 화면 폭을 넓히고 나온 글에서 표를 직접 찾은 뒤 Claude에 한 번 물어보고 저장한다.
 - 서버 구성: 코드 `~/apps/ssakda`(GitHub에서 https로 받음), 실행 LaunchDaemon `cloud.ssakda.server`(환경 `SERVER_MODE=1`, `HOST=127.0.0.1`, `PORT=3210`), 로그 `~/Library/Logs/ssakda/server.log`. plist와 배포 스크립트는 서버 `~/apps/_ops/ssakda/`에 있다(공개 저장소라 서버 경로·계정이 든 파일은 저장소에 넣지 않는다). 크롬은 Homebrew cask, Codex는 `npm i -g @openai/codex`로 설치했다.
 - 주소: pyoing 저장소 `deploy/pyoing.yml`의 터널 설정에 `ssakda.sect.kr → http://127.0.0.1:3210`을 넣었다. 바꾸는 절차는 서버 안내서(pyoing 저장소 README "운영")와 같다.
 - 배포: `main`에 push한 뒤 `ssh infraserver apps/_ops/ssakda/deploy.sh`(받아 오기 → 재시작 → 확인). 재시작만: `ssh infraserver sudo -n /bin/launchctl kickstart -k system/cloud.ssakda.server`. 그 밖에 sudo가 필요한 서버 작업은 사용자에게 명령을 주고 사용자가 한다.
@@ -62,6 +62,7 @@
 - 확인한 것(시험 계정, 읽기만): 채팅 목록 화면은 `/pro/chats`이고, 목록 데이터는 `api.soomgo.com/api/v2.4/chats/?role=provider`(`results` 배열)다. 탭에 "스마트견적"이 따로 있다. 실시간 연결 표(`POST /v1/accounts/web-socket/token`)의 JWT 안 `channels`에 `private-userid-<계정 번호>`가 있다. (프로필 화면 `/profile`의 `/v2/user/<계정 번호>/profile?role=provider`에 업체 이름·서비스·소개가 있지만, 사용자 결정으로 열지 않는다.)
 - 시험 계정으로 실제 흐름을 확인했다(2026-10-15): 켜기 → 크롬 창에 숨고 로그인 화면 → 사용자가 로그인 → 계정 번호 알아내기 → 채팅 목록 읽기 → 그 계정의 '본 것' 기록 만들기(빈 목록).
 - AI 단계는 지어낸 채팅방 글로 시험했다(Codex): 거주 청소·유품 정리는 보냄, 이미 대화 중인 방은 보내지 않음.
+- 서버에서 Claude로도 같은 시험을 했다(2026-10-19): 유품정리 새 문의는 보냄(약 8초), 이미 대화 중인 방은 보내지 않음. 서버의 숨고 창은 PC·휴대폰 크기에서 로그인 화면 보이기, 칸 누르기·키보드 입력(한글 포함)·밀기, https://ssakda.sect.kr 을 거친 실시간 화면까지 확인했다. AI가 일하는 탭을 창이 따라가는 것은 실제 채팅방이 없어 아직 못 봤다.
 - 짐작으로 만든 것(실제 계정으로 처음 켤 때 확인): 채팅방 주소가 `/pro/chats/<번호>`이고 목록에 그 링크가 있다는 것, 입력칸이 textarea(또는 contenteditable)라는 것, 전송 버튼에 '전송'·'보내기' 글자나 이름표가 있다는 것, 보낼 때 chat/message가 든 주소로 요청이 나간다는 것, 견적만 보낸 새 채팅방에 고수가 바로 글을 쓸 수 있다는 것.
 - 처음 켜면 `data/soomgo-debug/`에 `chats.txt/.jpg`, `chats-list.json`(목록 데이터)이, 새 채팅방마다 `chat-<번호>.txt/.jpg/.json`이 남는다. 이것으로 위 짐작을 확인하고 고친다. 목록 데이터에 채팅방 생성 시각이나 스마트견적 여부가 있으면, 처음 보는 예전 채팅방(목록 첫 쪽 밖에 있다가 고객 글로 위로 올라온 방)을 걸러 내는 데 쓴다. 지금은 AI의 "이미 대화 중이면 보내지 않음" 규칙에만 기대고 있다.
 - 실제 계정으로 "자동으로 보내기"를 시험하기 전에 사용자에게 먼저 확인한다(고객에게 글이 나간다).
