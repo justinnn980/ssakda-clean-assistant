@@ -64,7 +64,7 @@ function paint(im) {
 
 // ---------- 서버에서 받기 ----------
 // 연결한다. 창 크기와 먼저 볼 채팅방을 알려준다.
-// '켜기'와 함께 열린 창이면 서버의 숨고 창이 아직 뜨는 중일 수 있어, 닫혀 있다고 하면 2초 간격으로 5번까지 다시 해 본다
+// 서버의 숨고 창이 막 뜨는 중이거나(켜기, 숨고 계정 바꾸기, 비서 재시작) 잠깐 닫힌 것일 수 있어, 닫혀 있다고 하면 2초 간격으로 5번까지 다시 해 본다
 let retries = 5;
 function connect() {
   es?.close();
@@ -107,7 +107,7 @@ function draw(b64) {
     lastImg = im;
     paint(im);
     show('');
-    retries = 0;
+    retries = 5;
   };
   im.src = `data:image/jpeg;base64,${b64}`;
 }
@@ -135,6 +135,7 @@ let sending = false;
 function push(a) {
   const t = queue.at(-1);
   if (t?.type === 'scroll' && a.type === 'scroll') Object.assign(t, { x: a.x, y: a.y, dx: t.dx + a.dx, dy: t.dy + a.dy });
+  else if (t?.type === 'move' && a.type === 'move') Object.assign(t, { x: a.x, y: a.y });
   else if (t?.type === 'edit' && a.type === 'edit') {
     // 앞의 글자 고치기에 이어 붙인다: 지울 글자가 앞에서 넣을 글자 안이면 거기서 지우고, 넘치면 더 지운다
     if (a.del <= t.text.length) t.text = t.text.slice(0, t.text.length - a.del) + a.text;
@@ -189,7 +190,14 @@ cv.addEventListener('pointerdown', (e) => {
   touch = { x: e.clientX, y: e.clientY, lx: e.clientX, ly: e.clientY, moved: false };
 });
 cv.addEventListener('pointermove', (e) => {
-  if (!touch) return;
+  if (!touch) {
+    // 마우스는 올려 두기만 해도 숨고에 전한다. 마우스를 올리면 열리는 메뉴(프로필 메뉴 등)가 열리게
+    if (e.pointerType === 'mouse') {
+      const [x, y] = toPage(e);
+      push({ type: 'move', x, y });
+    }
+    return;
+  }
   if (Math.hypot(e.clientX - touch.x, e.clientY - touch.y) > 8) touch.moved = true;
   if (!touch.moved) return;
   // 손가락을 위로 올리면 화면이 아래로 내려간다

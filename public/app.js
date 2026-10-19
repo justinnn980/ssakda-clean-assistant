@@ -659,6 +659,7 @@ async function renderSettings() {
     <div class="state-line">${chatLine(st)}</div>
     <label>새 채팅방에 답장하는 방식</label>
     <select id="chatMode">${Object.entries(CHAT_MODE).map(([k, v]) => `<option value="${k}" ${k === st.settings.chatMode ? 'selected' : ''}>${v}</option>`).join('')}</select>
+    ${serverMode ? '<p><button class="btn small" id="soomgoLogout">숨고 계정 바꾸기</button></p><p class="muted">숨고에서 로그아웃하고, 열리는 숨고 창에서 다른 계정으로 로그인합니다. 바꾼 계정에 이미 있던 채팅방에는 답하지 않습니다.</p>' : ''}
     <p class="muted">"자동으로 보내기"는 확인 없이 고객에게 바로 보냅니다. 채팅방마다 한 번만 보내고, 이미 직접 대화 중인 채팅방, 업무와 관계없는 요청, 연락처나 금액이 들어간 답장은 보내지 않고 사유를 남깁니다. 켜기 전에 있던 채팅방에는 보내지 않습니다.<br>
     ${serverMode ? '"채팅창에 써 두고 멈춤"은 서버의 숨고 창에 답장을 써 두기만 합니다. 첫 화면의 "창 열기"로 숨고 창을 열어 확인하고 전송을 누르거나, 문의 화면에서 답장을 복사해 숨고 앱에서 보냅니다.' : '"채팅창에 써 두고 멈춤"은 노트북의 숨고 창에 새 탭을 열어 답장을 써 두기만 합니다.'}</p>
   </div>
@@ -739,6 +740,20 @@ async function renderSettings() {
   document.getElementById('swChat').onchange = (e) => {
     if (serverMode && e.target.checked) openSoomgoWindow();
     change('chat', e.target, e.target.checked && !local && !serverMode ? '켜면 노트북에 크롬 창이 열립니다. 처음에는 노트북 앞에서 숨고에 로그인해야 합니다. 켤까요?' : '');
+  };
+  // 숨고 계정 바꾸기 (서버에서만): 숨고 창을 먼저 열고(누른 순간에 열어야 브라우저가 막지 않는다), 서버에서 숨고 로그인을 지운다
+  const logoutBtn = document.getElementById('soomgoLogout');
+  if (logoutBtn) logoutBtn.onclick = async () => {
+    if (!confirm('숨고에서 로그아웃하고 다른 계정으로 로그인할까요?')) return;
+    if (st.settings.chat) openSoomgoWindow();
+    logoutBtn.disabled = true;
+    try {
+      await api('/api/soomgo/logout', {});
+      toast(st.settings.chat ? '로그아웃했습니다. 숨고 창에서 새 계정으로 로그인해 주세요.' : '로그아웃했습니다. 채팅 자동 응대를 켜면 숨고 로그인 화면이 나옵니다.');
+    } catch (err) {
+      toast(err.message);
+    }
+    renderSettings();
   };
   // 새 채팅방에 답장하는 방식을 바꿨을 때. '자동으로 보내기'는 확인 없이 고객에게 나간다는 것을 한 번 더 확인한다
   document.getElementById('chatMode').onchange = async (e) => {

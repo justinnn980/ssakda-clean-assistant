@@ -461,6 +461,15 @@ async function handle(req, res) {
     await soomgo.viewerInput(await readJson(req, 16384));
     return send(res, 200, { ok: true });
   }
+  // --- 숨고 계정 바꾸기 (서버에서만): 숨고 확인을 멈추고, 숨고 로그인을 지운 뒤, 켜져 있던 것은 다시 켠다(숨고 로그인 화면이 나온다) ---
+  if (SERVER_MODE && method === 'POST' && p === '/api/soomgo/logout') {
+    await soomgo.stopChatWatcher();
+    await soomgo.stopWatcher();
+    await soomgo.forgetLogin();
+    if (settings.chat) startChat();
+    if (settings.soomgo && QUOTE_FEATURES) startSoomgo();
+    return send(res, 200, { ok: true });
+  }
 
   // --- 프로그램 끄기: 먼저 답을 보내고 0.3초 뒤에 끈다. 서버에서는 끄지 않는다(꺼도 저절로 다시 켜진다) ---
   if (method === 'POST' && p === '/api/shutdown') {
