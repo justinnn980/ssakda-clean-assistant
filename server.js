@@ -70,6 +70,10 @@ const cfg = JSON.parse(readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
 // 견적 기능(숨고 받은 요청 확인, 예상 금액 계산, 견적 보내기)을 쓸지. 2026-10-15 사용자 결정으로 끄고 화면에서 숨겼다.
 // 코드는 남겨 두었으니 true로 바꾸면 다시 쓸 수 있다
 const QUOTE_FEATURES = false;
+// 서버(사무실 맥북)에서 돌리는지. 서버의 실행 설정(launchd)이 SERVER_MODE=1을 넣어 준다.
+// 서버에는 크롬 창을 띄울 화면이 없어서 숨고 창을 웹 화면('숨고 화면')으로 보여 준다. 노트북에서만 되는 기능(밖에서 접속하기 스위치, 카톡 일감 잡기, 프로그램 끄기)은 쓰지 않는다.
+// 밖에서 접속하는 주소는 서버의 터널이 맡고, .env의 BASE_URL에 적어 둔다
+const SERVER_MODE = process.env.SERVER_MODE === '1';
 
 // ---------- 분석 대기열 (한 번에 한 건씩) ----------
 // 앞의 분석이 끝나야 다음 분석이 시작되도록 줄을 세우는 변수. 처음에는 '이미 끝난 일'로 시작한다
@@ -253,7 +257,8 @@ async function chatAutoReply(inq, result) {
     } catch (e) {
       return skip(`숨고 채팅창에 써 두지 못했습니다. ${e.message.split('\n')[0]}`);
     }
-    inq.autoSend = { sent: false, prepared: true, reason: '숨고 채팅창에 답장을 써 두었습니다. 확인하고 전송을 눌러주세요.', at };
+    const where = SERVER_MODE ? '"숨고 화면"에서 ' : '';
+    inq.autoSend = { sent: false, prepared: true, reason: `숨고 채팅창에 답장을 써 두었습니다. ${where}확인하고 전송을 눌러주세요.`, at };
     inq.log.push({ at, action: '숨고 채팅창에 답장을 써 둠' });
     return;
   }
@@ -441,8 +446,20 @@ async function handle(req, res) {
     }
   }
 
-  // --- 프로그램 끄기: 먼저 답을 보내고 0.3초 뒤에 끈다 ---
+  // --- 숨고 화면 (서버에서만): 열린 숨고 탭 목록, 탭 한 장의 모습, 그 탭에서 누르기·글자 넣기 ---
+  if (SERVER_MODE && method === 'GET' && p === '/api/soomgo/view') return send(res, 200, await soomgo.screenView());
+  if (SERVER_MODE && method === 'GET' && p === '/api/soomgo/shot') {
+    const img = await soomgo.screenShot(Number(url.searchParams.get('id')));
+    return img ? send(res, 200, img, { 'Content-Type': 'image/jpeg' }) : send(res, 404, '탭을 찾을 수 없습니다.');
+  }
+  if (SERVER_MODE && method === 'POST' && p === '/api/soomgo/input') {
+    await soomgo.screenInput(await readJson(req, 4096));
+    return send(res, 200, { ok: true });
+  }
+
+  // --- 프로그램 끄기: 먼저 답을 보내고 0.3초 뒤에 끈다. 서버에서는 끄지 않는다(꺼도 저절로 다시 켜진다) ---
   if (method === 'POST' && p === '/api/shutdown') {
+    if (SERVER_MODE) return send(res, 400, { error: '서버에서 도는 비서는 여기서 끌 수 없습니다.' });
     send(res, 200, { ok: true });
     setTimeout(shutdown, 300);
     return;
@@ -696,6 +713,12 @@ function startChat() {
 
 // 설정 화면에서 바꾼 값을 받아 바로 적용하고 파일에 저장한다
 async function applySettings(next) {
+  // 서버에서는 노트북 전용 설정(밖에서 접속하기, 카톡 일감 잡기)을 받지 않는다
+  if (SERVER_MODE) {
+    delete next.tunnel;
+    delete next.talk;
+    delete next.kakaoWatch;
+  }
   // 밖에서 접속하기 스위치. 비밀번호가 8자리보다 짧으면 켜지 못하게 한다
   if (typeof next.tunnel === 'boolean' && next.tunnel !== settings.tunnel) {
     if (next.tunnel && PIN.length < 8) throw Object.assign(new Error('밖에서 접속하려면 접속 비밀번호가 8자리 이상이어야 합니다.'), { status: 400 });
@@ -743,8 +766,8 @@ try {
 } catch {
   // git이 없거나 내려받은 폴더가 아니면 표시하지 않는다
 }
-// 화면에 보여줄 지금 상태를 한데 모은다: 설정, 버전, 견적 기능을 보여줄지, 외부 접속 주소와 안내, 숨고 상태, 숨고 채팅 상태, 카톡 상태
-const featureState = () => ({ settings, version, quoteFeatures: QUOTE_FEATURES, tunnelUrl: tunnel.url, tunnelNote: tunnel.note, soomgo: soomgo.status, chat: soomgo.chatStatus, talk: kakaotalk.status });
+// 화면에 보여줄 지금 상태를 한데 모은다: 설정, 버전, 견적 기능을 보여줄지, 서버에서 도는지, 외부 접속 주소와 안내, 숨고 상태, 숨고 채팅 상태, 카톡 상태
+const featureState = () => ({ settings, version, quoteFeatures: QUOTE_FEATURES, serverMode: SERVER_MODE, tunnelUrl: tunnel.url, tunnelNote: tunnel.note, soomgo: soomgo.status, chat: soomgo.chatStatus, talk: kakaotalk.status });
 
 // 서버의 프로세스 번호를 적어 두는 파일. stop.sh가 이 번호로 프로그램을 끈다
 const PID_FILE = path.join(store.DATA_DIR, 'server.pid');
@@ -771,20 +794,25 @@ server.on('error', (e) => {
   process.exit(1);
 });
 
-// 서버를 연다. 같은 와이파이의 휴대폰에서도 접속할 수 있게 모든 주소(0.0.0.0)에서 받는다
-server.listen(PORT, '0.0.0.0', async () => {
+// 서버를 연다. 같은 와이파이의 휴대폰에서도 접속할 수 있게 모든 주소(0.0.0.0)에서 받는다.
+// 서버에서는 터널로만 들어오게 HOST=127.0.0.1(이 컴퓨터 안에서만)로 연다
+server.listen(PORT, process.env.HOST || '0.0.0.0', async () => {
   // data 폴더를 만들고 프로세스 번호를 적어 둔다
   await mkdir(store.DATA_DIR, { recursive: true });
   await writeFile(PID_FILE, String(process.pid));
   // 이 컴퓨터의 와이파이 주소를 찾아 접속 주소와 비밀번호를 터미널에 보여준다
   const ips = Object.values(os.networkInterfaces()).flat().filter((n) => n && n.family === 'IPv4' && !n.internal).map((n) => n.address);
   console.log('싹다클린 AI 비서가 켜졌습니다.');
-  console.log(`  이 노트북:  http://localhost:${PORT}`);
-  for (const ip of ips) console.log(`  휴대폰:    http://${ip}:${PORT}`);
-  console.log(`  접속 비밀번호: ${PIN}`);
-  // 지난번에 켜 두었던 기능들을 다시 켠다
-  if (settings.tunnel && PIN.length >= 8) startTunnel();
+  // 서버에서는 이 글이 기록 파일에 남으므로 비밀번호를 적지 않는다
+  if (SERVER_MODE) console.log(`  서버에서 실행 중: ${process.env.BASE_URL || `http://localhost:${PORT}`}`);
+  else {
+    console.log(`  이 노트북:  http://localhost:${PORT}`);
+    for (const ip of ips) console.log(`  휴대폰:    http://${ip}:${PORT}`);
+    console.log(`  접속 비밀번호: ${PIN}`);
+  }
+  // 지난번에 켜 두었던 기능들을 다시 켠다 (서버에서는 노트북 전용 기능을 빼고)
+  if (settings.tunnel && PIN.length >= 8 && !SERVER_MODE) startTunnel();
   if (settings.soomgo && QUOTE_FEATURES) startSoomgo();
   if (settings.chat) startChat();
-  if (settings.kakaoWatch) kakaotalk.start(settings.talk);
+  if (settings.kakaoWatch && !SERVER_MODE) kakaotalk.start(settings.talk);
 });

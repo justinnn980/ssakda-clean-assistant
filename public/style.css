@@ -17,6 +17,8 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 -ap
 /* 맨 위 줄: 화면을 내려도 위에 붙어 있다 */
 header { position: sticky; top: 0; z-index: 5; display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: var(--card); border-bottom: 1px solid var(--line); }
 .brand { font-weight: 700; color: var(--text); text-decoration: none; }
+/* 맨 위 줄의 버튼 글자는 한 줄로 */
+header .btn { white-space: nowrap; }
 /* 내용이 들어가는 가운데 부분. 넓은 화면에서도 720픽셀까지만 넓어진다 */
 main { max-width: 720px; margin: 0 auto; padding: 16px 16px 80px; }
 /* 칸 제목 */
@@ -35,6 +37,9 @@ h2 { font-size: 17px; margin: 0 0 10px; }
 /* 버튼 등을 가로로 나란히 놓는 줄 */
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .row > .btn { flex: 1; }
+/* 줄 안의 입력 칸은 남는 폭을 다 쓰고, fixed 버튼은 글자 폭만큼만 차지한다 */
+.row > input { flex: 1; min-width: 0; }
+.row > .btn.fixed { flex: none; }
 /* 글 쓰는 칸, 입력 칸, 고르는 칸 */
 textarea, input, select { width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 12px; font: inherit; background: var(--bg); color: var(--text); }
 textarea { min-height: 120px; resize: vertical; }
@@ -90,6 +95,16 @@ details summary { cursor: pointer; font-weight: 600; }
 .switch input:checked + span { background: var(--brand); }
 .switch input:checked + span::after { transform: translateX(24px); }
 .switch input:focus-visible + span { outline: 2px solid var(--text); outline-offset: 2px; }
+/* 숨고 화면: 서버의 숨고 탭 모습. 넓은 화면도 휴대폰 폭에 맞춰 줄여 보여주고, '크게 보기'면 두 배로 키워 옆으로 밀어 본다 */
+.screen { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: auto; margin-bottom: 14px; }
+.screen img { display: block; width: 100%; height: auto; cursor: pointer; touch-action: manipulation; }
+.screen.big img { width: 200%; max-width: none; }
+/* 숨고 화면 아래의 조작 버튼: 휴대폰 폭에 네 개가 한 줄로 들어가게 좁게 */
+.pad .row > .btn { padding: 10px 4px; white-space: nowrap; }
+.pad .row + .row, .pad .row + label { margin-top: 10px; }
+/* 글자 앞의 체크 칸 한 줄 */
+.check { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 10px 0; }
+.check input { width: auto; }
 /* 상태를 알려주는 한 줄 */
 .state-line { margin-top: 10px; padding: 10px 12px; border-radius: 10px; background: var(--bg); font-size: 14px; overflow-wrap: anywhere; }
 /* 상태 점: 회색 꺼짐, 초록 정상, 주황 기다리는 중, 빨강 문제 */

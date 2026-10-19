@@ -14,6 +14,11 @@ let pollTimer = null;
 let focusCard = null; // 설정 화면을 열 때 바로 보여줄 칸
 // 견적 기능(숨고 받은 요청 확인, 예상 금액, 견적 보내기)을 보여줄지. 서버가 알려준다 (지금은 꺼 두고 숨겼다)
 let quoteFeatures = true;
+// 서버(사무실 맥북)에서 도는지. 서버에서는 숨고 창을 '숨고 화면'으로 보여 주고, 노트북 전용 기능(밖에서 접속하기, 카톡 일감 잡기, 프로그램 끄기)을 숨긴다
+let serverMode = false;
+// 서버와 노트북에서 다른 안내: 숨고에 로그인하는 곳, 숨고 확인이 멈췄을 때 볼 곳
+const loginWhere = () => (serverMode ? '위쪽 <a href="#/screen">숨고 화면</a>에서 로그인하면 바로 시작합니다.' : '노트북에 열린 크롬 창에서 로그인하면 바로 시작합니다.');
+const stallHint = () => (serverMode ? '위쪽 <a href="#/screen">숨고 화면</a>을 확인해 주세요.' : '노트북이 켜져 있는지, 숨고 크롬 창이 열려 있는지 확인해 주세요.');
 
 // 서버가 쓰는 영어 값을 화면에 보여줄 한글로 바꾸는 표: 문의 상태, 위험도, 필요 여부
 const STATUS = { analyzing: '분석 중', awaiting_owner: '승인 대기', sent: '전송 완료', on_hold: '보류', rejected: '거절', booked: '예약 확정', error: '분석 실패' };
@@ -84,7 +89,7 @@ function renderLogin() {
   // 다른 화면에서 돌던 새로 고침을 멈춘다
   clearInterval(pollTimer);
   app.innerHTML = `<div class="card"><h2>접속 비밀번호</h2>
-    <p class="muted">노트북에서 프로그램을 켤 때 화면에 표시된 숫자입니다.</p>
+    <p class="muted">사장님이 받은 접속 비밀번호(숫자)를 넣어 주세요.</p>
     <input id="pin" type="password" inputmode="numeric" autocomplete="current-password">
     <p><button class="btn primary block" id="go">들어가기</button></p></div>`;
   // 비밀번호를 서버에 보내고, 맞으면 처음부터 다시 시작한다. 틀리면 알림을 띄운다
@@ -111,7 +116,7 @@ function soomgoOkText(sg) {
   if (!sg.lastCheck) return '<span class="dot wait"></span>숨고 확인을 시작하는 중입니다.';
   // 마지막 확인이 8분 넘게 지났으면 멈춘 것으로 보고 알린다
   if (Date.now() - new Date(sg.lastCheck) > 8 * 60 * 1000)
-    return `<span class="dot bad"></span><span class="err">숨고 확인이 ${when(sg.lastCheck)} 이후 멈춰 있습니다. 노트북이 켜져 있는지, 숨고 크롬 창이 열려 있는지 확인해 주세요.</span>`;
+    return `<span class="dot bad"></span><span class="err">숨고 확인이 ${when(sg.lastCheck)} 이후 멈춰 있습니다. ${stallHint()}</span>`;
   // 방금 확인에서 새 요청을 등록했는지에 따라 문구를 고른다
   const gotNew = sg.lastNew && sg.lastNew >= sg.lastCheck;
   const result = gotNew
@@ -132,12 +137,12 @@ const CHAT_MODE = { send: '자동으로 보내기', fill: '채팅창에 써 두�
 function chatLine(st) {
   const c = st.chat;
   if (!st.settings.chat) return '<span class="dot"></span>꺼져 있습니다. 숨고 채팅을 확인하지 않고 답장도 보내지 않습니다.';
-  if (c.state === 'login') return '<span class="dot wait"></span>숨고 로그인이 필요합니다. 노트북에 열린 크롬 창에서 로그인하면 바로 시작합니다.';
+  if (c.state === 'login') return `<span class="dot wait"></span>숨고 로그인이 필요합니다. ${loginWhere()}`;
   if (c.state === 'error') return `<span class="dot bad"></span><span class="err">${esc(c.message)}</span>`;
   if (c.state !== 'ok' || !c.lastCheck) return '<span class="dot wait"></span>숨고 창을 여는 중입니다.';
   // 마지막 확인이 5분 넘게 지났으면 멈춘 것으로 보고 알린다
   if (Date.now() - new Date(c.lastCheck) > 5 * 60 * 1000)
-    return `<span class="dot bad"></span><span class="err">숨고 채팅 확인이 ${when(c.lastCheck)} 이후 멈춰 있습니다. 노트북이 켜져 있는지, 숨고 크롬 창이 열려 있는지 확인해 주세요.</span>`;
+    return `<span class="dot bad"></span><span class="err">숨고 채팅 확인이 ${when(c.lastCheck)} 이후 멈춰 있습니다. ${stallHint()}</span>`;
   return `<span class="dot on"></span>숨고 채팅 확인 중 · 마지막 확인 ${when(c.lastCheck)}<br>${esc(c.message)}${c.lastNew ? ` · 마지막 새 채팅방 ${when(c.lastNew)}` : ''}`;
 }
 // 숨고 답변 보내는 방식의 화면 이름
@@ -170,7 +175,7 @@ async function renderList() {
     : sg.state === 'ok'
       ? soomgoOkText(sg)
       : sg.state === 'login'
-        ? '<span class="dot wait"></span>숨고 로그인이 필요합니다. 노트북에 열린 크롬 창에서 로그인하면 바로 시작합니다.'
+        ? `<span class="dot wait"></span>숨고 로그인이 필요합니다. ${loginWhere()}`
         : sg.state === 'error'
           ? `<span class="dot bad"></span><span class="err">${esc(sg.message)}</span>`
           : '<span class="dot wait"></span>숨고 창을 여는 중입니다.';
@@ -207,7 +212,7 @@ async function renderList() {
       ${tk.events.map((ev) => `<div class="muted">${when(ev.at)} · ${esc(ev.text)} → ${ev.sent ? `${ev.to ? `${esc(ev.to)}님에게 개인톡 보냄` : '같은 방에 답장 보냄'} (${(ev.ms / 1000).toFixed(1)}초)` : `<span class="err">못 보냄: ${esc(ev.note)}</span>`}</div>`).join('')}</div>
       <button class="btn ${talkOn ? 'danger' : 'primary'}" id="talkPower">${talkOn ? '끄기' : '켜기'}</button></div></div>`;
   // 화면에 그린다: 숨고 칸, 카톡 칸, 탭(탭마다 문의 수), 문의 카드들(제목·상태·위험도·지역·시각), 카카오 알림 안내
-  app.innerHTML = `${chatNote}${quoteFeatures ? soomgoNote : ''}${talkNote}<div class="tabs">${Object.entries(filters)
+  app.innerHTML = `${chatNote}${quoteFeatures ? soomgoNote : ''}${serverMode ? '' : talkNote}<div class="tabs">${Object.entries(filters)
     .map(([k, v]) => `<button class="tab ${k === listFilter ? 'on' : ''}" data-f="${k}">${v} ${items.filter((i) => match[k].includes(i.status)).length}</button>`)
     .join('')}</div>
     ${shown.length ? '' : `<div class="card muted">해당하는 문의가 없습니다.${quoteFeatures ? ' 오른쪽 위 "새 문의"로 숨고 캡처를 올려주세요.' : ''}</div>`}
@@ -222,10 +227,10 @@ async function renderList() {
       .join('')}${kakaoNote}`;
   // 탭을 누르면 그 탭으로 바꿔 다시 그린다
   app.querySelectorAll('.tab').forEach((b) => (b.onclick = () => ((listFilter = b.dataset.f), renderList())));
-  // '바꾸기'를 누르면 설정 화면의 카톡 칸으로 바로 가게 표시해 둔다
-  document.getElementById('talkEdit').onclick = () => (focusCard = 'talkCard');
+  // '바꾸기'를 누르면 설정 화면의 카톡 칸으로 바로 가게 표시해 둔다 (서버에서는 카톡 칸이 없다)
+  if (!serverMode) document.getElementById('talkEdit').onclick = () => (focusCard = 'talkCard');
   // 카톡 일감 잡기 켜기·끄기 버튼
-  document.getElementById('talkPower').onclick = async (e) => {
+  if (!serverMode) document.getElementById('talkPower').onclick = async (e) => {
     e.target.disabled = true;
     try {
       await api('/api/settings', { kakaoWatch: !talkOn });
@@ -240,7 +245,7 @@ async function renderList() {
     e.target.disabled = true;
     try {
       await api('/api/settings', { chat: !chatOn });
-      toast(chatOn ? '채팅 자동 응대를 껐습니다.' : '채팅 자동 응대를 켰습니다. 노트북의 크롬 창을 확인해 주세요.');
+      toast(chatOn ? '채팅 자동 응대를 껐습니다.' : serverMode ? '채팅 자동 응대를 켰습니다. 로그인이 필요하면 위쪽 "숨고 화면"에서 해 주세요.' : '채팅 자동 응대를 켰습니다. 노트북의 크롬 창을 확인해 주세요.');
     } catch (err) {
       toast(err.message);
     }
@@ -263,7 +268,7 @@ async function renderList() {
   clearInterval(pollTimer);
   const soomgoOn = chatOn || (quoteFeatures && on);
   const soomgoOk = (!chatOn || st.chat.state === 'ok') && (!(quoteFeatures && on) || sg.state === 'ok');
-  const every = items.some((i) => i.status === 'analyzing') || talkOn ? 5000 : !soomgoOn ? 0 : soomgoOk ? 30000 : 5000;
+  const every = items.some((i) => i.status === 'analyzing') || (talkOn && !serverMode) ? 5000 : !soomgoOn ? 0 : soomgoOk ? 30000 : 5000;
   // 첫 화면에 머물러 있을 때만 새로 고친다
   if (every) pollTimer = setInterval(() => location.hash.length <= 2 && renderList(), every);
 }
@@ -551,6 +556,7 @@ function renderChatDetail(inq, thread) {
     <h2>${esc(inq.title)}</h2>
     <div><span class="badge state">${STATUS[inq.status]}</span></div>
     ${inq.autoSend ? `<p class="${inq.autoSend.sent || inq.autoSend.prepared ? 'muted' : 'err'}">${autoSendText(inq.autoSend, 'chat')}</p>` : ''}
+    ${serverMode && inq.autoSend?.prepared && !sent ? `<a class="btn small" href="#/screen/${esc(inq.chatId)}">숨고 화면에서 보기</a>` : ''}
     ${inq.error ? `<p class="err">최근 재작성 실패: ${esc(inq.error)}</p>` : ''}
   </div>
 
@@ -616,7 +622,7 @@ async function renderSettings() {
     : sg.state === 'ok'
       ? `<span class="dot on"></span>잘 되고 있습니다. ${esc(sg.message)}${sg.lastCheck ? ` · 마지막 확인 ${when(sg.lastCheck)}` : ''}`
       : sg.state === 'login'
-        ? '<span class="dot wait"></span>노트북에 열린 크롬 창에서 숨고에 로그인해 주세요. 로그인하면 자동으로 시작됩니다.'
+        ? `<span class="dot wait"></span>숨고 로그인이 필요합니다. ${loginWhere()}`
         : sg.state === 'error'
           ? `<span class="dot bad"></span>${esc(sg.message)}`
           : '<span class="dot wait"></span>시작하는 중입니다.';
@@ -638,7 +644,7 @@ async function renderSettings() {
   // 화면에 그린다: 프로그램 상태와 버전 / 숨고 자동 확인 / 분석할 AI / 숨고 답변 보내는 방식 / 밖에서 접속하기 / 카톡 일감 잡기 / 카카오톡 알림 / 프로그램 끄기
   app.innerHTML = `
   <div class="card"><span class="dot on"></span><b>프로그램이 켜져 있습니다</b>
-    <p class="muted">노트북이 켜져 있는 동안 계속 동작합니다. 노트북 덮개를 닫으면 멈춥니다.${st.version ? `<br>버전 ${esc(st.version)}` : ''}</p></div>
+    <p class="muted">${serverMode ? '사무실 서버에서 늘 켜져 있습니다. 휴대폰이나 컴퓨터를 꺼도 계속 동작합니다.' : '노트북이 켜져 있는 동안 계속 동작합니다. 노트북 덮개를 닫으면 멈춥니다.'}${st.version ? `<br>버전 ${esc(st.version)}` : ''}</p></div>
 
   <div class="card" id="chatCard">
     <div class="setting"><div><h2>숨고 채팅 자동 응대</h2>
@@ -648,7 +654,7 @@ async function renderSettings() {
     <label>새 채팅방에 답장하는 방식</label>
     <select id="chatMode">${Object.entries(CHAT_MODE).map(([k, v]) => `<option value="${k}" ${k === st.settings.chatMode ? 'selected' : ''}>${v}</option>`).join('')}</select>
     <p class="muted">"자동으로 보내기"는 확인 없이 고객에게 바로 보냅니다. 채팅방마다 한 번만 보내고, 이미 직접 대화 중인 채팅방, 업무와 관계없는 요청, 연락처나 금액이 들어간 답장은 보내지 않고 사유를 남깁니다. 켜기 전에 있던 채팅방에는 보내지 않습니다.<br>
-    "채팅창에 써 두고 멈춤"은 노트북의 숨고 창에 새 탭을 열어 답장을 써 두기만 합니다.</p>
+    ${serverMode ? '"채팅창에 써 두고 멈춤"은 서버의 숨고 창에 답장을 써 두기만 합니다. 위쪽 "숨고 화면"에서 확인하고 전송을 누르거나, 문의 화면에서 답장을 복사해 숨고 앱에서 보냅니다.' : '"채팅창에 써 두고 멈춤"은 노트북의 숨고 창에 새 탭을 열어 답장을 써 두기만 합니다.'}</p>
   </div>
 
   <div class="card" ${quoteFeatures ? '' : 'hidden'}>
@@ -661,7 +667,7 @@ async function renderSettings() {
   <div class="card">
     <h2>문의를 분석할 AI</h2>
     <select id="aiProvider"><option value="codex" ${st.settings.ai === 'codex' ? 'selected' : ''}>ChatGPT (Codex)</option><option value="claude" ${st.settings.ai === 'claude' ? 'selected' : ''}>Claude</option></select>
-    <p class="muted">고른 쪽의 프로그램이 노트북에 설치되어 있고 유료 구독 계정으로 로그인되어 있어야 합니다. ChatGPT는 Codex, Claude는 Claude Code를 씁니다.</p>
+    <p class="muted">고른 쪽의 프로그램이 ${serverMode ? '서버' : '노트북'}에 설치되어 있고 유료 구독 계정으로 로그인되어 있어야 합니다. ChatGPT는 Codex, Claude는 Claude Code를 씁니다.</p>
   </div>
 
   <div class="card" ${quoteFeatures ? '' : 'hidden'}>
@@ -671,14 +677,14 @@ async function renderSettings() {
     "자동 발송"은 확인 없이 보내며 보낼 때마다 숨고캐시가 나갑니다. 금액을 계산할 수 없는 문의와 업무가 아닌 요청은 보내지 않습니다.</p>
   </div>
 
-  <div class="card">
+  <div class="card" ${serverMode ? 'hidden' : ''}>
     <div class="setting"><div><h2>밖에서도 접속하기</h2>
       <div class="muted">집 밖에서 휴대폰으로 볼 수 있는 주소를 만듭니다. 주소와 비밀번호는 다른 사람에게 알려주지 마세요.</div></div>
       ${sw('swTunnel', st.settings.tunnel)}</div>
     <div class="state-line">${tunnelLine}</div>
   </div>
 
-  <div class="card" id="talkCard">
+  <div class="card" id="talkCard" ${serverMode ? 'hidden' : ''}>
     <h2>카톡 일감 잡기</h2>
     <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. 노트북의 카카오톡이 켜져 있어야 하고, 개인톡을 보내는 3초쯤은 마우스가 저절로 움직입니다. 오픈채팅방에서는 프로필로 대화를 걸 수 없어서, 그 사람과 이미 만들어 둔 1:1 채팅방이 있을 때만 그 방으로 보냅니다. 저장하면 바로 적용됩니다.</p>
     <label>지켜볼 채팅방</label>
@@ -705,7 +711,7 @@ async function renderSettings() {
     }</div>
   </div>
 
-  <div class="card">
+  <div class="card" ${serverMode ? 'hidden' : ''}>
     <h2>프로그램 끄기</h2>
     <p class="muted">끄면 문의 분석과 숨고 확인이 모두 멈춥니다. 다시 켜려면 노트북 바탕화면의 "싹다클린 AI 비서"를 두 번 누르세요.</p>
     <button class="btn danger block" id="off">프로그램 끄기</button>
@@ -725,7 +731,7 @@ async function renderSettings() {
   };
   // 숨고 채팅 자동 응대 스위치. 노트북이 아닌 곳에서 켜면 크롬 창이 열린다는 것을 먼저 알린다
   document.getElementById('swChat').onchange = (e) =>
-    change('chat', e.target, e.target.checked && !local ? '켜면 노트북에 크롬 창이 열립니다. 처음에는 노트북 앞에서 숨고에 로그인해야 합니다. 켤까요?' : '');
+    change('chat', e.target, e.target.checked && !local && !serverMode ? '켜면 노트북에 크롬 창이 열립니다. 처음에는 노트북 앞에서 숨고에 로그인해야 합니다. 켤까요?' : '');
   // 새 채팅방에 답장하는 방식을 바꿨을 때. '자동으로 보내기'는 확인 없이 고객에게 나간다는 것을 한 번 더 확인한다
   document.getElementById('chatMode').onchange = async (e) => {
     const mode = e.target.value;
@@ -740,7 +746,7 @@ async function renderSettings() {
   };
   // 숨고 스위치. 노트북이 아닌 곳에서 켜면 크롬 창이 열린다는 것을 먼저 알린다
   document.getElementById('swSoomgo').onchange = (e) =>
-    change('soomgo', e.target, e.target.checked && !local ? '켜면 노트북에 크롬 창이 열립니다. 처음에는 노트북 앞에서 숨고에 로그인해야 합니다. 켤까요?' : '');
+    change('soomgo', e.target, e.target.checked && !local && !serverMode ? '켜면 노트북에 크롬 창이 열립니다. 처음에는 노트북 앞에서 숨고에 로그인해야 합니다. 켤까요?' : '');
   // 분석할 AI를 바꿨을 때
   document.getElementById('aiProvider').onchange = async (e) => {
     try {
@@ -766,8 +772,8 @@ async function renderSettings() {
   // 밖에서 접속하기 스위치. 밖에서 접속한 채로 끄면 바로 끊긴다는 것을 먼저 알린다
   document.getElementById('swTunnel').onchange = (e) =>
     change('tunnel', e.target, !e.target.checked && viaTunnel ? '지금 밖에서 접속 중입니다. 끄면 이 화면이 바로 끊기고, 집에 가서 다시 켜야 합니다. 끌까요?' : '');
-  // 방 이름을 직접 치다 틀리지 않게, 이 노트북 카카오톡의 방 목록에서 고를 수 있게 한다
-  api('/api/talk/rooms')
+  // 방 이름을 직접 치다 틀리지 않게, 이 노트북 카카오톡의 방 목록에서 고를 수 있게 한다 (서버에는 카카오톡이 없다)
+  if (!serverMode) api('/api/talk/rooms')
     .then(({ rooms, note }) => {
       const list = document.getElementById('talkRooms');
       const hint = document.getElementById('talkRoomsNote');
@@ -800,6 +806,127 @@ async function renderSettings() {
   if (waiting) pollTimer = setInterval(() => location.hash === '#/settings' && !document.querySelector('.switch input:disabled') && renderSettings(), 4000);
 }
 
+// ---------- 숨고 화면 (서버에서 돌 때) ----------
+// 서버에 열린 숨고 탭의 모습을 1초쯤마다 받아 보여준다. 그림을 누르면 숨고에서 그 자리가 눌리고,
+// 아래 칸에 쓴 글자는 숨고 화면에서 깜빡이는 칸에 들어간다. 숨고 로그인도 여기서 한다.
+// 지금 보고 있는 탭 번호와, 지금 돌고 있는 새로 고침(화면을 다시 그리면 옛것은 스스로 멈춘다)
+let screenTab = null;
+let screenLoop = null;
+function renderScreen(chatId) {
+  clearInterval(pollTimer);
+  const loop = (screenLoop = {});
+  // 첫 응대 문의에서 왔으면 그 채팅방 탭을 먼저 보여준다
+  let wantChat = chatId;
+  app.innerHTML = `<div class="card"><h2>숨고 화면</h2>
+    <p class="muted">서버에 열린 숨고 창입니다. 그림을 누르면 그 자리가 눌리고, 아래 칸에 쓴 글자는 숨고 화면에서 깜빡이는 칸에 들어갑니다.</p>
+    <div class="state-line" id="scrState"><span class="dot wait"></span>숨고 창을 불러오는 중입니다.</div>
+    <p></p><select id="scrTab" hidden></select></div>
+  <div class="screen" id="scrBox" hidden><img id="scrImg" alt="숨고 화면"></div>
+  <div class="card pad" id="scrPad" hidden>
+    <div class="row"><button class="btn small" data-act="scroll" data-dy="-500">▲ 위로</button><button class="btn small" data-act="scroll" data-dy="500">▼ 아래로</button><button class="btn small" data-act="back">뒤로</button><button class="btn small" data-act="reload">새로고침</button></div>
+    <label for="scrText">글자 넣기</label>
+    <div class="row"><input id="scrText" autocomplete="off" autocapitalize="off" spellcheck="false"><button class="btn primary small fixed" id="scrSend">넣기</button></div>
+    <label class="check"><input type="checkbox" id="scrHide"> 넣는 글자 가리기 (비밀번호)</label>
+    <div class="row"><button class="btn small" data-act="key" data-key="Backspace">지우기</button><button class="btn small" data-act="key" data-key="Tab">다음 칸</button><button class="btn small" data-act="key" data-key="Enter">엔터</button></div>
+    <div class="row"><button class="btn small" id="scrZoom">크게 보기</button><button class="btn small danger" id="scrClose" hidden>이 탭 닫기</button></div>
+    <p class="muted">넣은 글자(비밀번호 포함)는 숨고 칸에 바로 넣기만 하고 어디에도 저장하지 않습니다.</p></div>`;
+  const $ = (id) => document.getElementById(id);
+  const img = $('scrImg');
+  const tabSel = $('scrTab');
+  // 마지막으로 받은 탭 목록 (탭을 고르는 칸을 바뀔 때만 다시 그리려고)
+  let lastTabs = '';
+
+  // 지금 탭의 모습을 받아 그림을 바꾼다. 받지 못하면 전의 그림을 그대로 둔다
+  async function loadShot() {
+    if (screenTab == null) return;
+    const res = await fetch(`/api/soomgo/shot?id=${screenTab}&t=${Date.now()}`).catch(() => null);
+    if (!res?.ok || screenLoop !== loop) return;
+    const old = img.src;
+    img.src = URL.createObjectURL(await res.blob());
+    if (old.startsWith('blob:')) URL.revokeObjectURL(old);
+  }
+
+  // 열린 탭 목록을 받아 보여줄 탭을 정하고, 그 탭의 모습을 받는다. 화면을 떠나면 멈춘다
+  async function tick() {
+    if (screenLoop !== loop || !location.hash.startsWith('#/screen')) return;
+    let wait = document.hidden ? 5000 : 1200;
+    try {
+      const view = await api('/api/soomgo/view');
+      const open = view.open && view.pages.length;
+      $('scrBox').hidden = $('scrPad').hidden = tabSel.hidden = !open;
+      if (!open) {
+        $('scrState').innerHTML = '<span class="dot"></span>숨고 창이 닫혀 있습니다. 첫 화면에서 "숨고 채팅 자동 응대"를 켜면 열립니다.';
+        wait = 4000;
+      } else {
+        // 보고 있던 탭이 닫혔으면 다른 탭으로 바꾼다: 문의에서 온 채팅방 탭, 로그인 화면, 가장 최근 탭 순서
+        if (wantChat) {
+          const chat = view.pages.find((p) => p.url.includes(`/pro/chats/${wantChat}`));
+          if (chat) screenTab = chat.id;
+          wantChat = '';
+        }
+        if (!view.pages.some((p) => p.id === screenTab)) screenTab = view.pick;
+        const cur = view.pages.find((p) => p.id === screenTab);
+        $('scrState').innerHTML = cur.login
+          ? '<span class="dot wait"></span>로그인 화면입니다. 칸을 누른 뒤 아래 "글자 넣기"로 아이디와 비밀번호를 넣고, 로그인 버튼을 눌러 주세요.'
+          : `<span class="dot on"></span>${cur.auto ? '자동 확인에 쓰는 탭입니다. 1분마다 저절로 채팅 목록으로 돌아갑니다.' : '숨고 탭입니다.'}`;
+        // 탭이 둘 이상이면 고르는 칸을 보여준다
+        const tabs = JSON.stringify(view.pages.map((p) => [p.id, p.title, p.url, p.auto]));
+        if (tabs !== lastTabs) {
+          lastTabs = tabs;
+          tabSel.innerHTML = view.pages
+            .map((p) => `<option value="${p.id}">${p.auto ? '자동 확인용 · ' : ''}${esc((p.title || p.url).slice(0, 40))}</option>`)
+            .join('');
+        }
+        if (document.activeElement !== tabSel) tabSel.value = String(screenTab);
+        tabSel.hidden = view.pages.length < 2;
+        $('scrClose').hidden = cur.auto;
+        await loadShot();
+      }
+    } catch {
+      // 잠깐 끊겨도 다음 차례에 다시 받는다
+    }
+    setTimeout(tick, wait);
+  }
+
+  // 동작 하나를 서버에 보내고, 조금 뒤 바뀐 모습을 받는다
+  async function act(a) {
+    try {
+      await api('/api/soomgo/input', { id: screenTab, ...a });
+    } catch (e) {
+      toast(e.message);
+    }
+    setTimeout(loadShot, 400);
+    setTimeout(loadShot, 1500);
+  }
+
+  // 그림을 누르면 그 자리를 숨고 탭의 같은 자리로 바꿔 누른다
+  img.onclick = (e) => {
+    const r = img.getBoundingClientRect();
+    act({ type: 'tap', x: ((e.clientX - r.left) / r.width) * img.naturalWidth, y: ((e.clientY - r.top) / r.height) * img.naturalHeight });
+  };
+  // 위로·아래로·뒤로·새로 고침·지우기·다음 칸·엔터 버튼
+  app.querySelectorAll('[data-act]').forEach((b) => (b.onclick = () => act({ type: b.dataset.act, dy: Number(b.dataset.dy), key: b.dataset.key })));
+  // 글자 넣기: 넣은 뒤 칸을 비운다
+  const sendText = () => {
+    const text = $('scrText').value;
+    if (!text) return toast('넣을 글자를 먼저 써 주세요.');
+    $('scrText').value = '';
+    act({ type: 'text', text });
+  };
+  $('scrSend').onclick = sendText;
+  $('scrText').onkeydown = (e) => e.key === 'Enter' && sendText();
+  $('scrHide').onchange = (e) => ($('scrText').type = e.target.checked ? 'password' : 'text');
+  // 크게 보기: 그림을 두 배로 키워 옆으로 밀어 본다
+  $('scrZoom').onclick = (e) => {
+    const big = $('scrBox').classList.toggle('big');
+    e.target.textContent = big ? '작게 보기' : '크게 보기';
+  };
+  // 다른 탭 고르기, 지금 탭 닫기
+  tabSel.onchange = () => ((screenTab = Number(tabSel.value)), loadShot());
+  $('scrClose').onclick = () => confirm('이 탭을 닫을까요?') && act({ type: 'close' });
+  tick();
+}
+
 // ---------- 시작 ----------
 // 주소 뒤의 # 부분을 보고 알맞은 화면을 그린다: #/i/번호는 문의 한 건, #/new는 새 문의, #/settings는 설정, 그 밖에는 목록
 async function route() {
@@ -810,6 +937,7 @@ async function route() {
     if (h.startsWith('#/i/')) await renderDetail(h.slice(4));
     else if (h === '#/new') renderNew();
     else if (h === '#/settings') await renderSettings();
+    else if (h.startsWith('#/screen') && serverMode) renderScreen(h.split('/')[2] || '');
     else await renderList();
     // 화면 맨 위로 올리고, 바로 보여줄 칸이 정해져 있으면 그 칸으로 내려간다
     window.scrollTo(0, 0);
@@ -830,6 +958,9 @@ async function boot() {
     // 견적 기능을 숨겼으면 맨 위의 '새 문의' 버튼도 숨긴다
     quoteFeatures = state.quoteFeatures !== false;
     document.getElementById('newBtn').hidden = !quoteFeatures;
+    // 서버에서 돌면 맨 위에 '숨고 화면' 버튼을 보여준다
+    serverMode = Boolean(state.serverMode);
+    document.getElementById('screenBtn').hidden = !serverMode;
     route();
   } catch {
     // 로그인 화면이 이미 표시됨
