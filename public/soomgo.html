@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+<!-- '숨고 창': 서버에서 도는 숨고 크롬 탭을 실시간으로 보여주는 창. 비서 화면의 '숨고 창' 버튼을 누르면 새 창으로 열린다.
+     키보드가 올라오면 창 높이가 줄어들게 해서(interactive-widget), 숨고 화면도 실제 브라우저처럼 그만큼 줄어든다 -->
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0f766e">
+<title>숨고 창</title>
+<style>
+  /* 위쪽 줄의 색. 휴대폰이 어두운 화면이면 어둡게 */
+  :root { --bar: #f4f6f5; --pill: #e4e9e7; --text: #17201e; --muted: #64706d; --line: #dfe5e3; }
+  @media (prefers-color-scheme: dark) { :root { --bar: #1b2221; --pill: #2c3634; --text: #e8eeec; --muted: #94a19e; --line: #2c3634; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #fff; font: 15px/1.4 -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  /* 위쪽 줄: 뒤로, 주소, 탭 고르기, 새로고침, 닫기 */
+  #bar { display: flex; align-items: center; gap: 2px; height: 46px; padding: 0 4px; background: var(--bar); border-bottom: 1px solid var(--line); color: var(--text); }
+  #bar button { flex: none; width: 40px; height: 38px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font-size: 20px; cursor: pointer; }
+  #bar button:active { background: var(--pill); }
+  #addr { flex: 1; min-width: 0; padding: 7px 12px; border-radius: 999px; background: var(--pill); color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #tabs { flex: none; max-width: 32%; height: 34px; border: 0; border-radius: 8px; background: var(--pill); color: var(--text); font: inherit; font-size: 13px; }
+  /* 숨고 화면. 손가락 움직임은 이 창이 받아서 숨고 탭으로 넘긴다 */
+  #view { position: relative; background: #e9eceb; }
+  #cv { display: block; touch-action: none; }
+  /* 아래쪽 줄: AI 비서가 지금 하는 일 */
+  #ai { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; background: var(--bar); border-top: 1px solid var(--line); color: var(--text); font-size: 13px; white-space: nowrap; overflow: hidden; }
+  #aiText { overflow: hidden; text-overflow: ellipsis; }
+  .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: #64706d; }
+  .dot.on { background: #15803d; } .dot.wait { background: #b45309; } .dot.work { background: #2563eb; animation: blink 1s infinite; } .dot.bad { background: #b91c1c; }
+  @keyframes blink { 50% { opacity: .3; } }
+  /* 화면이 오기 전이나 닫혔을 때의 안내 */
+  #msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; color: #64706d; background: #fff; }
+  #msg a { color: #0f766e; }
+  /* 아래쪽에 잠깐 뜨는 알림 */
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: 10px; background: #17201e; color: #fff; font-size: 14px; z-index: 10; }
+  /* 키보드 입력을 받는 숨은 칸. 보이지 않지만 누르면 휴대폰 키보드가 올라온다 */
+  .kb { position: fixed; left: 0; top: 0; width: 1px; height: 24px; padding: 0; border: 0; opacity: 0; color: transparent; caret-color: transparent; background: transparent; font-size: 16px; resize: none; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <button id="back" aria-label="뒤로">‹</button>
+  <div id="addr">숨고</div>
+  <select id="tabs" aria-label="다른 탭 보기" hidden></select>
+  <button id="reload" aria-label="새로고침">⟳</button>
+  <button id="close" aria-label="닫기">✕</button>
+</div>
+<div id="view"><canvas id="cv"></canvas><div id="msg">숨고 창을 여는 중입니다.</div></div>
+<div id="ai"><span class="dot" id="aiDot"></span><b>AI 비서</b><span id="aiText">상태를 불러오는 중입니다.</span></div>
+<div id="toast" hidden></div>
+<textarea id="kb" class="kb" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" aria-hidden="true"></textarea>
+<input id="kbpw" class="kb" type="password" autocomplete="off" aria-hidden="true">
+<script type="module" src="/soomgo-window.js"></script>
+</body>
+</html>

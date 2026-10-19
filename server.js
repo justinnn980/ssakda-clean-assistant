@@ -71,7 +71,7 @@ const cfg = JSON.parse(readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
 // 코드는 남겨 두었으니 true로 바꾸면 다시 쓸 수 있다
 const QUOTE_FEATURES = false;
 // 서버(사무실 맥북)에서 돌리는지. 서버의 실행 설정(launchd)이 SERVER_MODE=1을 넣어 준다.
-// 서버에는 크롬 창을 띄울 화면이 없어서 숨고 창을 웹 화면('숨고 화면')으로 보여 준다. 노트북에서만 되는 기능(밖에서 접속하기 스위치, 카톡 일감 잡기, 프로그램 끄기)은 쓰지 않는다.
+// 서버에는 크롬 창을 띄울 화면이 없어서 숨고 탭을 비서 웹의 새 창('숨고 창')에 실시간으로 보여 준다. 노트북에서만 되는 기능(밖에서 접속하기 스위치, 카톡 일감 잡기, 프로그램 끄기)은 쓰지 않는다.
 // 밖에서 접속하는 주소는 서버의 터널이 맡고, .env의 BASE_URL에 적어 둔다
 const SERVER_MODE = process.env.SERVER_MODE === '1';
 
@@ -194,6 +194,9 @@ async function autoFill(inq, analysis, range) {
 // 채팅방 한 건의 첫 응대를 만든다: AI가 채팅방 화면을 보고 확인할 것과 사진을 요청하는 답장을 씀 → (설정에 따라) 숨고 채팅에 보내거나 써 둠 → 카톡 알림
 async function runChatReply(inq) {
   const id = inq.id;
+  // 숨고 창 아래쪽 줄에 AI 비서가 하는 일과, 끝나면 그 결과를 보여준다
+  soomgo.chatStatus.work = 'AI 비서가 새 채팅방의 첫 응대를 쓰는 중입니다.';
+  const done = (text) => Object.assign(soomgo.chatStatus, { work: '', done: { at: new Date().toISOString(), text } });
   try {
     const result = await analyze(inq, store.inquiryDir(id), settings.ai, 'chat');
     // 분석하는 동안 화면에서 문의가 바뀌었을 수 있어 다시 읽은 뒤 결과를 붙인다
@@ -210,6 +213,7 @@ async function runChatReply(inq) {
     // 카톡 알림: 보냄 / 써 둠 / 보내지 않은 사유
     const a = inq.autoSend;
     const outcome = a.sent ? '첫 응대를 보냈습니다.' : a.prepared ? a.reason : `보내지 않았습니다: ${a.reason}`;
+    done(`${inq.title} · ${outcome}`);
     await kakao.notify(`[숨고 채팅] ${inq.title}\n${outcome}`, `/#/i/${id}`);
   } catch (e) {
     // AI가 실패하면 보내지 않고, 사유를 남긴 뒤 카톡으로 알린다
@@ -218,6 +222,7 @@ async function runChatReply(inq) {
     inq.error = e.message;
     inq.log.push({ at: new Date().toISOString(), action: '첫 응대 작성 실패', detail: e.message });
     await store.save(inq);
+    done(`${inq.title} · 첫 응대를 만들지 못했습니다.`);
     await kakao.notify(`[숨고 채팅] 첫 응대를 만들지 못했습니다: ${inq.title}\n${e.message}`, `/#/i/${id}`);
   }
 }
@@ -251,13 +256,14 @@ async function chatAutoReply(inq, result) {
   if (soomgo.chatStatus.account !== inq.account) return skip('숨고에 로그인한 계정이 바뀌어 보내지 않았습니다.');
   const reply = result.reply.trim();
   // 써 두기만 하는 방식: 노트북의 숨고 창에 새 탭을 열어 채팅창에 써 둔다
+  soomgo.chatStatus.work = settings.chatMode === 'fill' ? 'AI 비서가 채팅창에 답장을 쓰는 중입니다.' : 'AI 비서가 답장을 보내는 중입니다.';
   if (settings.chatMode === 'fill') {
     try {
       await soomgo.prepareChat(inq.chatId, reply);
     } catch (e) {
       return skip(`숨고 채팅창에 써 두지 못했습니다. ${e.message.split('\n')[0]}`);
     }
-    const where = SERVER_MODE ? '"숨고 화면"에서 ' : '';
+    const where = SERVER_MODE ? '"숨고 창"에서 ' : '';
     inq.autoSend = { sent: false, prepared: true, reason: `숨고 채팅창에 답장을 써 두었습니다. ${where}확인하고 전송을 눌러주세요.`, at };
     inq.log.push({ at, action: '숨고 채팅창에 답장을 써 둠' });
     return;
@@ -446,14 +452,13 @@ async function handle(req, res) {
     }
   }
 
-  // --- 숨고 화면 (서버에서만): 열린 숨고 탭 목록, 탭 한 장의 모습, 그 탭에서 누르기·글자 넣기 ---
-  if (SERVER_MODE && method === 'GET' && p === '/api/soomgo/view') return send(res, 200, await soomgo.screenView());
-  if (SERVER_MODE && method === 'GET' && p === '/api/soomgo/shot') {
-    const img = await soomgo.screenShot(Number(url.searchParams.get('id')));
-    return img ? send(res, 200, img, { 'Content-Type': 'image/jpeg' }) : send(res, 404, '탭을 찾을 수 없습니다.');
+  // --- 숨고 창 (서버에서만): 숨고 탭을 실시간으로 보내는 연결(창 크기와, 먼저 볼 채팅방을 받는다), 창에서 한 동작(누르기·밀기·글자) ---
+  if (SERVER_MODE && method === 'GET' && p === '/api/soomgo/stream') {
+    const q = url.searchParams;
+    return soomgo.openViewer(req, res, { w: q.get('w'), h: q.get('h'), dpr: q.get('dpr'), chat: q.get('chat') || '' });
   }
   if (SERVER_MODE && method === 'POST' && p === '/api/soomgo/input') {
-    await soomgo.screenInput(await readJson(req, 4096));
+    await soomgo.viewerInput(await readJson(req, 16384));
     return send(res, 200, { ok: true });
   }
 
