@@ -111,17 +111,32 @@ async function fill({ text }) {
   return { prepared: true };
 }
 
+// 전송 버튼: '전송'이나 '보내기'라고 적힌(또는 그런 이름표가 붙은) 버튼.
+// 없으면 입력칸 바로 오른쪽, 같은 높이에 있는 가장 가까운 버튼(숨고 웹은 글자 없는 동그란 ↑ 아이콘 버튼이다)
+function findSendButton(box) {
+  const buttons = [...document.querySelectorAll('button, [role="button"]')].filter(visible);
+  const named = buttons.filter((b) => /^\s*(전송|보내기)\s*$/.test(b.innerText) || /전송|보내|send/i.test(b.getAttribute('aria-label') || '')).at(-1);
+  if (named) return named;
+  const r = box.getBoundingClientRect();
+  const near = buttons
+    .map((b) => ({ b, q: b.getBoundingClientRect() }))
+    .filter(({ b, q }) => !b.contains(box) && !box.contains(b) && !b.innerText.trim())
+    .filter(({ q }) => q.left >= r.right - 8 && q.left - r.right < 120 && q.top + q.height / 2 > r.top - 10 && q.top + q.height / 2 < r.bottom + 10)
+    .sort((x, y) => x.q.left - y.q.left);
+  return near[0]?.b || null;
+}
+
 // 채팅창에 답장을 써 넣고 전송한다. 한 번만 누르고, 보내졌는지 확인되지 않으면 더 누르지 않는다
 async function send({ text }) {
   const r = await fill({ text });
   if (!r.prepared) return r;
   const box = findBox();
-  // 전송 버튼: '전송'이나 '보내기'라고 적힌 버튼, 또는 그런 이름표가 붙은 버튼
-  const btn = [...document.querySelectorAll('button')]
-    .filter(visible)
-    .filter((b) => /^\s*(전송|보내기)\s*$/.test(b.innerText) || /전송|보내/.test(b.getAttribute('aria-label') || ''))
-    .at(-1);
-  if (!btn || btn.disabled) return { prepared: true, note: '전송 버튼을 찾지 못해 채팅창에 써 두기만 했습니다. 확인하고 전송을 눌러주세요.' };
+  // 글을 넣은 뒤 버튼이 눌릴 수 있게 바뀔 때까지 잠깐 기다린다 (3초까지)
+  const btn = await waitFor(() => {
+    const b = findSendButton(box);
+    return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' ? b : null;
+  }, 3000);
+  if (!btn) return { prepared: true, note: '전송 버튼을 찾지 못해 채팅창에 써 두기만 했습니다. 확인하고 전송을 눌러주세요.' };
   btn.click();
   // 보내졌다는 표시: 입력칸이 비워지고 보낸 글이 화면에 나타났다 (15초까지)
   const head = String(text).trim().split('\n')[0].slice(0, 20);

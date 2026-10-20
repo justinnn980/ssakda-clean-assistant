@@ -112,6 +112,8 @@ function showWork() {
 }
 
 // ---------- 1분마다 하는 확인 ----------
+// 채팅 목록을 잇달아 못 읽은 횟수
+let listMisses = 0;
 async function tick() {
   await restored;
   if (busy) return console.log('[비서] 앞의 확인이 아직 도는 중이라 건너뜀');
@@ -145,7 +147,13 @@ async function tick() {
     status.lastCheck = new Date().toISOString();
     if (list.loggedOut) return await report({ state: 'login', message: '숨고 로그인이 필요합니다. 숨고 창에서 로그인해 주세요.', work: '' });
     if (!list.account) return await report({ state: 'error', message: '로그인한 숨고 계정을 확인하지 못했습니다. 잠시 뒤 다시 확인합니다.', work: '' });
-    if (list.count == null || (list.count && !list.ids.length)) return await report({ state: 'error', message: '채팅 목록을 제대로 읽지 못했습니다. 화면 구조 확인이 필요합니다.', work: '' });
+    // 숨고 화면이 목록을 늦게 받으면 한 번쯤 못 읽을 수 있다. 두 번 잇달아 못 읽었을 때만 알린다
+    if (list.count == null || (list.count && !list.ids.length)) {
+      listMisses += 1;
+      if (listMisses < 2) return await report({ work: '' });
+      return await report({ state: 'error', message: '채팅 목록을 제대로 읽지 못했습니다. 화면 구조 확인이 필요합니다.', work: '' });
+    }
+    listMisses = 0;
     status.account = list.account;
     // 서버가 처음 보는 채팅방을 골라 준다 (그 계정을 처음 보면 지금 있는 채팅방은 모두 본 것으로 치고 아무것도 주지 않는다)
     const { fresh } = await api('/api/ext/claim', { account: list.account, ids: list.ids, count: list.count });
