@@ -198,6 +198,14 @@ async function autoFill(inq, analysis, range) {
 // 채팅방 한 건의 첫 응대를 만든다: AI가 채팅방 화면을 보고 확인할 것과 사진을 요청하는 답장을 씀 → (설정에 따라) 숨고 채팅에 보내거나 써 둠 → 카톡 알림
 async function runChatReply(inq) {
   const id = inq.id;
+  // 숨고 알리미의 알림만 새로 온 채팅방은 답하지 않는다. AI를 돌리지 않고 카톡으로도 알리지 않으며, '보류'로 둔다
+  const notice = noticeOnly(inq.messages[0]?.text || '');
+  if (notice) {
+    inq.title = `숨고 알리미: ${notice}`.slice(0, 60);
+    inq.status = 'on_hold';
+    skipChat(inq, `숨고 알리미의 알림(${notice})만 새로 온 채팅방이라 답하지 않았습니다.`);
+    return store.save(inq);
+  }
   try {
     const result = await analyze(inq, store.inquiryDir(id), settings.ai, 'chat');
     // 분석하는 동안 화면에서 문의가 바뀌었을 수 있어 다시 읽은 뒤 결과를 붙인다
@@ -227,6 +235,25 @@ async function runChatReply(inq) {
     await store.save(inq);
     await kakao.notify(`[숨고 채팅] 첫 응대를 만들지 못했습니다: ${inq.title}\n${e.message}`, `/#/i/${id}`);
   }
+}
+
+// 채팅방의 마지막 글이 숨고 알리미(숨고가 자동으로 보내는 안내)면 그 알림 제목을, 아니면 빈 글을 돌려준다.
+// 예전 채팅방이 '미접속 견적 보상'(고객이 48시간 동안 견적을 읽지 않음) 같은 알림으로 목록 위로 올라오면 새 채팅방처럼 보인다.
+// '고객이 견적을 읽었어요' 알림은 견적을 보낸 직후의 새 채팅방에도 붙으므로 빼고 본다.
+// 화면 글에서 글마다 끝에 시각(오전 6:48)이 붙는 것으로 가른다: 알리미 글의 시각 뒤에 다른 시각이 없으면 알리미가 마지막 글이다
+function noticeOnly(text) {
+  const lines = text.split('\n').map((l) => l.trim());
+  const end = lines.indexOf('메시지를 입력하세요.');
+  const chat = end < 0 ? lines : lines.slice(0, end);
+  const at = chat.lastIndexOf('숨고 알리미');
+  if (at < 0) return '';
+  const isTime = (l) => /^(오전|오후)\s?\d{1,2}:\d{2}$/.test(l);
+  const after = chat.slice(at + 1);
+  const t = after.findIndex(isTime);
+  if (t < 0 || after.slice(t + 1).some(isTime)) return '';
+  const notice = after.slice(0, t).filter(Boolean);
+  if (notice.some((l) => /견적을 읽었/.test(l))) return '';
+  return notice[0] || '알림';
 }
 
 // 고객에게 바로 나가는 글을 마지막으로 점검한다. 문제가 있으면 그 사유를, 없으면 빈 글을 돌려준다

@@ -361,7 +361,7 @@ async function renderDetail(id) {
   if (!a) {
     app.innerHTML = `<div class="card"><h2>${esc(inq.title)}</h2>${
       inq.autoSend
-        ? `<p class="err">${esc(inq.error || inq.autoSend.reason)}</p>`
+        ? `<p class="${inq.status === 'error' ? 'err' : 'muted'}">${esc(inq.error || inq.autoSend.reason)}</p>`
         : `<p class="err">분석에 실패했습니다: ${esc(inq.error)}</p><button class="btn primary block" id="retry">다시 분석</button>`
     }</div>${thread}${inq.autoSend ? statusCard(inq) : ''}`;
     document.getElementById('retry')?.addEventListener('click', async () => (await api(`/api/inquiries/${id}/reanalyze`, {}), renderDetail(id)));
