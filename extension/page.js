@@ -144,7 +144,19 @@ window.__ssakdaPage = (() => {
     }
     return el;
   }
+  // 입력칸과 같은 입력 묶음 안에서 입력칸 뒤에 있는 전송 칸. 숨고 웹은 <img class="img-fluid btn-submit">다(2026-10-20 실제 기록).
+  // AI 비서의 숨고 창은 내려 둔 창이라 화면 크기가 0이어서, 화면 자리로는 찾을 수 없다
+  function submitInForm(box) {
+    const form = box.closest('.message-input-form, .chat-message-input, form');
+    if (!form) return null;
+    const named = form.querySelector('.btn-submit, [class*="submit"], [class*="send"]');
+    if (named && !named.contains(box)) return named;
+    const after = [...form.querySelectorAll('button, [role="button"], img, svg')].filter((el) => box.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING && !(el.innerText || '').trim());
+    return after.at(-1) || null;
+  }
   function findSendButton(box) {
+    const inForm = submitInForm(box);
+    if (inForm) return inForm;
     const buttons = clickables();
     const named = buttons.filter((b) => /^\s*(전송|보내기)\s*$/.test(b.innerText) || /전송|보내|send/i.test(b.getAttribute('aria-label') || '')).at(-1);
     if (named) return named;
