@@ -207,14 +207,17 @@ async function tick() {
   }
 }
 
-// 새 채팅방 하나: 새 탭에서 열어 글과 사진을 서버로 보내고, AI가 쓴 첫 응대를 그 탭의 채팅창에 써 넣는다
+// 새 채팅방 하나: AI 비서의 숨고 탭에서 열어(탭을 늘리지 않는다) 글과 사진을 서버로 보내고, AI가 쓴 첫 응대를 보낸다.
+// 다음 확인 때 그 탭은 채팅 목록으로 돌아간다. 사장님이 확인하고 전송해야 할 때(써 두고 멈춤, 또는 전송 버튼을 못 찾음)만
+// 사장님이 보던 크롬 창에 그 채팅방을 새 탭으로 열어 답장을 써 둔다
 async function handleRoom(listTab, chatId, account) {
   let inquiryId = null;
+  const url = `${CHATS_URL}/${chatId}`;
   try {
     await report({ work: '새 채팅방을 여는 중' });
-    const tab = await chrome.tabs.create({ windowId: listTab.windowId, url: `${CHATS_URL}/${chatId}`, active: true });
+    const tab = listTab;
     roomTabId = tab.id;
-    await waitLoaded(tab.id);
+    await navigate(tab.id, url);
     await report({ work: '새 채팅방을 읽는 중' });
     const room = await ask(tab.id, { cmd: 'read' });
     if (room.loggedOut) throw new Error('숨고 로그인이 풀려 있습니다.');
@@ -224,23 +227,29 @@ async function handleRoom(listTab, chatId, account) {
     status.lastNew = new Date().toISOString();
     await report({ work: '첫 응대를 쓰는 중' });
     const inq = await waitAnalysis(id);
-    // AI가 보내지 않기로 했거나(이미 대화 중 등) 실패했으면 탭을 닫는다. 사유는 비서 사이트의 문의에 남아 있다
-    if (!inq.extTask || inq.autoSend) {
-      chrome.tabs.remove(tab.id).catch(() => {});
-      return;
-    }
+    // AI가 보내지 않기로 했거나(이미 대화 중 등) 실패했으면 여기서 끝. 사유는 비서 사이트의 문의에 남아 있다
+    if (!inq.extTask || inq.autoSend) return;
     // 그 사이 사장님이 직접 보냈으면(문의 화면의 '보낸 것으로 표시') 써 넣지 않는다
     const latest = await api(`/api/inquiries/${id}`);
     if (latest.autoSend || latest.status === 'sent') return;
-    const sending = inq.extTask.mode === 'send';
-    await report({ work: sending ? '답장을 보내는 중' : '채팅창에 답장을 쓰는 중' });
-    const r = await ask(tab.id, { cmd: sending ? 'send' : 'fill', text: inq.extTask.reply });
+    const reply = inq.extTask.reply;
+    let r = null;
+    if (inq.extTask.mode === 'send') {
+      await report({ work: '답장을 보내는 중' });
+      r = await ask(tab.id, { cmd: 'send', text: reply });
+    }
+    // 써 두고 멈춤이거나 전송 버튼을 못 찾았으면, 사장님 창에 그 채팅방을 열어 써 둔다
+    if (!r || (r.prepared && !r.sent)) {
+      await report({ work: '채팅창에 답장을 쓰는 중' });
+      const own = await chrome.tabs.create({ url, active: true });
+      roomTabId = own.id;
+      await waitLoaded(own.id);
+      const filled = await ask(own.id, { cmd: 'fill', text: reply });
+      r = r ? (filled.prepared ? r : filled) : filled;
+      const result = r.prepared ? r.note || '답장을 써 두었습니다. 읽어 보고 전송을 눌러 주세요' : `답장을 쓰지 못했습니다: ${r.error}`;
+      chrome.tabs.sendMessage(own.id, { cmd: 'banner', text: result }).catch(() => {});
+    }
     await api(`/api/inquiries/${id}/typed`, r);
-    // 그 채팅방 탭의 표시를 결과로 바꿔 둔다
-    const result = r.sent ? '답장을 보냈습니다' : r.prepared ? r.note || '답장을 써 두었습니다. 읽어 보고 전송을 눌러 주세요' : `답장을 쓰지 못했습니다: ${r.error}`;
-    chrome.tabs.sendMessage(tab.id, { cmd: 'banner', text: result }).catch(() => {});
-    // 보냈으면 탭을 닫고, 써 두었으면 사장님이 확인하고 전송하도록 열어 둔다
-    if (r.sent) setTimeout(() => chrome.tabs.remove(tab.id).catch(() => {}), 3000);
   } catch (e) {
     console.log('[비서] 채팅방 처리 실패', chatId, e.message);
     // 실패해도 다음 채팅방은 계속한다. 문의를 만든 뒤에 실패했으면(탭이 닫힘 등) 그 문의에 사유를 남기고,

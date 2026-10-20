@@ -681,6 +681,7 @@ async function handle(req, res) {
     } else {
       skipChat(inq, `보내지 못했습니다. ${String(body.error || '').slice(0, 200)}`.trim());
     }
+    if (body.diag && !body.prepared) log('확장 기록', String(body.diag).slice(0, 3000));
     await store.save(inq);
     await notifyChatOutcome(inq);
     return send(res, 200, { ok: true });

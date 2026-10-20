@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "싹다클린 AI 비서",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "숨고 새 채팅방에 AI 비서가 첫 응대를 써 줍니다. 싹다클린 AI 비서 사이트와 함께 씁니다.",
   "icons": {
     "16": "icons/icon16.png",

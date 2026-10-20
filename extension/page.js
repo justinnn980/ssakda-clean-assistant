@@ -119,6 +119,31 @@ window.__ssakdaPage = (() => {
   }
   // 입력칸 오른쪽(120픽셀 안), 같은 높이이거나 입력칸 아래쪽 끝 근처에 있는 것
   const besideBox = (r, q) => q.left >= r.right - 8 && q.left - r.right < 120 && q.top + q.height / 2 > r.top - 10 && q.top + q.height / 2 < r.bottom + 60;
+  // 입력칸 오른쪽 화면 자리를 차례로 짚어 그 자리에 있는 작은 것(아이콘)을 찾는다.
+  // 숨고 웹의 ↑ 전송은 버튼(button)도 svg도 아닌 그림 칸이라 이름이나 종류로는 못 찾는다(2026-10-20 실제 기록)
+  function pointHits(box) {
+    const r = box.getBoundingClientRect();
+    const hits = [];
+    for (let y = Math.max(0, r.top); y <= Math.min(innerHeight - 1, r.bottom + 30); y += 8) {
+      for (let x = r.right + 2; x <= Math.min(innerWidth - 2, r.right + 120); x += 4) {
+        const el = document.elementFromPoint(x, y);
+        if (!el || el === document.body || el === document.documentElement || el.contains(box) || hits.includes(el)) continue;
+        const q = el.getBoundingClientRect();
+        if (q.width > 100 || q.height > 100) continue;
+        hits.push(el);
+      }
+    }
+    return hits;
+  }
+  // 누를 곳: 그 자리에서 손가락 모양이 되는 가장 가까운 윗칸(작은 것만). 없으면 그 자체
+  function clickTarget(el) {
+    for (let p = el, i = 0; p && i < 4; p = p.parentElement, i++) {
+      const q = p.getBoundingClientRect();
+      if (q.width > 120 || q.height > 120) break;
+      if (p.tagName === 'BUTTON' || p.getAttribute('role') === 'button' || getComputedStyle(p).cursor === 'pointer') return p;
+    }
+    return el;
+  }
   function findSendButton(box) {
     const buttons = clickables();
     const named = buttons.filter((b) => /^\s*(전송|보내기)\s*$/.test(b.innerText) || /전송|보내|send/i.test(b.getAttribute('aria-label') || '')).at(-1);
@@ -129,7 +154,24 @@ window.__ssakdaPage = (() => {
       .filter(({ b }) => !b.contains(box) && !box.contains(b) && !b.innerText.trim())
       .filter(({ q }) => besideBox(r, q))
       .sort((x, y) => x.q.left - y.q.left);
-    return near[0]?.b || null;
+    if (near[0]) return near[0].b;
+    const hit = pointHits(box).find((el) => !el.innerText?.trim());
+    return hit ? clickTarget(hit) : null;
+  }
+  // 사람이 누른 것과 같은 순서로 누른다(누름·뗌·클릭). 그림 칸은 click()만으로는 반응하지 않는 화면도 있다
+  function press(el) {
+    const q = el.getBoundingClientRect();
+    const at = { bubbles: true, cancelable: true, composed: true, clientX: q.left + q.width / 2, clientY: q.top + q.height / 2, button: 0 };
+    el.dispatchEvent(new PointerEvent('pointerdown', { ...at, pointerType: 'mouse', isPrimary: true }));
+    el.dispatchEvent(new MouseEvent('mousedown', at));
+    el.dispatchEvent(new PointerEvent('pointerup', { ...at, pointerType: 'mouse', isPrimary: true }));
+    el.dispatchEvent(new MouseEvent('mouseup', at));
+    el.click();
+  }
+  // 입력칸에서 Enter를 누른 것처럼 한다(전송 버튼을 끝내 못 찾았을 때)
+  function pressEnter(box) {
+    const at = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
+    for (const type of ['keydown', 'keypress', 'keyup']) box.dispatchEvent(new KeyboardEvent(type, at));
   }
   // 전송 버튼을 못 찾았을 때 고치는 데 쓸 기록: 입력칸 자리와 그 주변(입력칸 아래쪽 200픽셀 안)의 누를 수 있는 것들
   function sendDiag(box) {
@@ -140,7 +182,9 @@ window.__ssakdaPage = (() => {
       .filter(({ q }) => q.width && Math.abs(q.top + q.height / 2 - (r.top + r.height / 2)) < r.height / 2 + 200)
       .slice(-15)
       .map(({ el, q }) => `${el.tagName.toLowerCase()}${el.disabled ? '[disabled]' : ''}${el.getAttribute('aria-disabled') === 'true' ? '[aria-disabled]' : ''} ${rect(q)} cls=${String(el.getAttribute('class') || '').slice(0, 60)} label=${el.getAttribute('aria-label') || ''} text=${(el.innerText || '').trim().slice(0, 10)}`);
-    return `창 ${innerWidth}x${innerHeight}, 입력칸 ${box.tagName.toLowerCase()} ${rect(r)}\n${near.join('\n')}`;
+    const hits = pointHits(box).slice(0, 8).map((el) => `자리 ${el.tagName.toLowerCase()} ${rect(el.getBoundingClientRect())} cursor=${getComputedStyle(el).cursor} ${el.outerHTML.replace(/<svg[\s\S]*?<\/svg>/g, '<svg/>').slice(0, 160)}`);
+    const wrap = box.parentElement?.parentElement?.parentElement;
+    return `창 ${innerWidth}x${innerHeight}, 입력칸 ${box.tagName.toLowerCase()} ${rect(r)}\n${near.join('\n')}\n${hits.join('\n')}\n주변 ${(wrap?.outerHTML || '').replace(/<svg[\s\S]*?<\/svg>/g, '<svg/>').replace(/<textarea[\s\S]*?<\/textarea>/g, '<textarea/>').slice(0, 1500)}`;
   }
 
   // 채팅창에 답장을 써 넣고 전송한다. 한 번만 누르고, 보내졌는지 확인되지 않으면 더 누르지 않는다
@@ -153,12 +197,20 @@ window.__ssakdaPage = (() => {
       const b = findSendButton(box);
       return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' ? b : null;
     }, 3000);
-    if (!btn) return { prepared: true, note: '전송 버튼을 찾지 못해 채팅창에 써 두기만 했습니다. 확인하고 전송을 눌러주세요.', diag: sendDiag(box) };
-    btn.click();
-    // 보내졌다는 표시: 입력칸이 비워지고 보낸 글이 화면에 나타났다 (15초까지)
     const head = String(text).trim().split('\n')[0].slice(0, 20);
-    const ok = await waitFor(() => !boxText(box).trim() && document.body.innerText.includes(head), 15000);
-    return ok ? { sent: true } : { error: '전송을 눌렀지만 보내졌는지 확인되지 않았습니다. 숨고에서 직접 확인해 주세요.' };
+    // 보내졌다는 표시: 입력칸이 비워지고 보낸 글이 화면에 나타났다
+    const gone = () => !boxText(box).trim() && document.body.innerText.includes(head);
+    if (!btn) {
+      // 버튼을 못 찾으면 Enter로 한 번 해 본다. 보내지지 않았으면 써 둔 채로 둔다
+      const diag = sendDiag(box);
+      pressEnter(box);
+      if (await waitFor(gone, 4000)) return { sent: true, diag: 'Enter로 보냄' };
+      return { prepared: true, note: '전송 버튼을 찾지 못해 채팅창에 써 두기만 했습니다. 확인하고 전송을 눌러주세요.', diag };
+    }
+    press(btn);
+    // 한 번만 누르고, 보내졌는지 확인되지 않으면 더 누르지 않는다 (15초까지)
+    const ok = await waitFor(gone, 15000);
+    return ok ? { sent: true } : { error: '전송을 눌렀지만 보내졌는지 확인되지 않았습니다. 숨고에서 직접 확인해 주세요.', diag: sendDiag(box) };
   }
 
   return { list, read, fill, send };
