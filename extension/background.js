@@ -81,11 +81,49 @@ function navigate(tabId, url, ms = 45000) {
     chrome.tabs.update(tabId, { url }).catch(done);
   });
 }
-// 숨고 탭의 content.js에 일을 시키고 결과를 받는다. 막 열린 탭이면 준비될 때까지 몇 번 더 해 본다 (10초까지)
+// 숨고 화면에서 하는 일(list·read·fill·send)은 page.js가 한다. 일할 때마다 서버에서 최신본을 받아 쓰므로,
+// 숨고 화면이 바뀌어 page.js를 고쳐도 서버에 올리기만 하면 되고 확장을 다시 깔지 않는다. 서버에서 못 받으면 null(확장에 든 것을 쓴다)
+async function pageCode() {
+  try {
+    const res = await fetch(`${await serverUrl()}/api/ext/page.js`, { credentials: 'include', cache: 'no-store' });
+    if (res.ok) return await res.text();
+  } catch {
+    // 아래에서 확장에 든 page.js를 쓴다
+  }
+  return null;
+}
+// page.js를 숨고 탭(숨고 화면과 같은 자리)에 넣는다. 서버에서 받은 것이 들어가지 않으면 확장에 든 것을 넣는다
+async function loadPage(tabId, code) {
+  const target = { tabId };
+  if (code) {
+    try {
+      await chrome.scripting.executeScript({ target, world: 'MAIN', func: (c) => new Function(c)(), args: [code] });
+      return;
+    } catch (e) {
+      console.log('[비서] 서버의 page.js를 넣지 못해 확장에 든 것을 씀', e.message);
+    }
+  }
+  await chrome.scripting.executeScript({ target, world: 'MAIN', files: ['page.js'] });
+}
+// 숨고 탭에 일을 시키고 결과를 받는다. 막 열린 탭이면 준비될 때까지 몇 번 더 해 본다 (10초까지).
+// 다시 해 보는 것은 준비 단계뿐이다. 일(특히 전송)은 한 번만 시킨다
 async function ask(tabId, msg) {
+  const onPage = ['list', 'read', 'fill', 'send'].includes(msg.cmd);
+  const code = onPage ? await pageCode() : null;
   for (let i = 0; i < 20; i++) {
-    const r = await chrome.tabs.sendMessage(tabId, msg).catch(() => null);
-    if (r) return r;
+    if (!onPage) {
+      const r = await chrome.tabs.sendMessage(tabId, msg).catch(() => null);
+      if (r) return r;
+    } else if (await loadPage(tabId, code).then(() => true, () => false)) {
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: (m) => Promise.resolve(window.__ssakdaPage[m.cmd](m)).catch((e) => ({ error: e.message })),
+        args: [msg],
+      });
+      if (res?.result) return res.result;
+      throw new Error('숨고 탭이 일하는 도중에 바뀌었거나 응답하지 않습니다.');
+    }
     await sleep(500);
   }
   throw new Error('숨고 탭이 닫혔거나 응답하지 않습니다.');

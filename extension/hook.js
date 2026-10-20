@@ -1,14 +1,18 @@
 // 숨고 페이지 안에서 숨고 화면과 같은 자리(MAIN)에서 돈다.
-// 숨고 화면이 스스로 불러오는 채팅 목록과, 실시간 연결 표(로그인한 계정 번호가 들어 있다)의 답을 읽어 content.js에 건넨다.
+// 숨고 화면이 스스로 불러오는 채팅 목록과, 실시간 연결 표(로그인한 계정 번호가 들어 있다)의 답을 읽어 window.__ssakdaHook에 모아 둔다(page.js가 쓴다).
 // 숨고에 요청을 새로 하거나 바꾸지 않고, 화면이 받은 답을 읽기만 한다.
 (() => {
   // 읽을 답: 채팅방 목록(예: /api/v2.4/chats/?role=provider), 실시간 연결 표(/v1/accounts/web-socket/token)
-  const WANT = [/^https:\/\/api\.soomgo\.com\/(?:api\/)?v[\d.]+\/chats\/?\?/, /^https:\/\/api\.soomgo\.com\/v\d+\/accounts\/web-socket\/token/];
-  const wanted = (url) => WANT.some((re) => re.test(url));
-  // 받은 답(JSON 글)을 content.js에 건넨다
+  const CHATS_RE = /^https:\/\/api\.soomgo\.com\/(?:api\/)?v[\d.]+\/chats\/?\?/;
+  const TOKEN_RE = /^https:\/\/api\.soomgo\.com\/v\d+\/accounts\/web-socket\/token/;
+  const wanted = (url) => CHATS_RE.test(url) || TOKEN_RE.test(url);
+  const store = (window.__ssakdaHook = window.__ssakdaHook || {});
+  // 받은 답(JSON 글)을 모아 둔다
   const pass = (url, method, text) => {
     try {
-      window.postMessage({ ssakdaHook: true, url, method, body: JSON.parse(text) }, location.origin);
+      const body = JSON.parse(text);
+      if (method === 'GET' && CHATS_RE.test(url) && Array.isArray(body?.results)) store.chats = body;
+      else if (method === 'POST' && TOKEN_RE.test(url)) store.token = body;
     } catch {
       // JSON이 아니면 건너뛴다
     }

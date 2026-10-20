@@ -578,6 +578,11 @@ async function handle(req, res) {
     await kakao.notify(`[숨고 채팅] ${reason}`, `/#/i/${id}`);
     return send(res, 201, { id });
   }
+  // 확장이 숨고 화면에서 할 일(목록 읽기·채팅방 읽기·써 넣기·전송)의 최신 코드. 확장이 일할 때마다 받아 가므로,
+  // 숨고 화면이 바뀌어 이 파일을 고치면 서버에 올리기만 해도 사장님 PC에 바로 적용된다(확장을 다시 깔지 않는다)
+  if (EXT_RUNNER && method === 'GET' && p === '/api/ext/page.js') {
+    return send(res, 200, await readFile(path.join(ROOT, 'extension', 'page.js'), 'utf8'), { 'Content-Type': 'text/javascript; charset=utf-8' });
+  }
   // 확장 파일 내려받기 (PC 크롬에 설치할 때). extension 폴더를 압축해서 바로 보낸다
   if (EXT_RUNNER && method === 'GET' && p === '/api/extension.zip') {
     res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="ssakda-extension.zip"', 'Cache-Control': 'no-store' });
