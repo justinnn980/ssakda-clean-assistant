@@ -95,6 +95,15 @@ details summary { cursor: pointer; font-weight: 600; }
 .switch input:checked + span { background: var(--brand); }
 .switch input:checked + span::after { transform: translateX(24px); }
 .switch input:focus-visible + span { outline: 2px solid var(--text); outline-offset: 2px; }
+/* 사용 안내: 단계(큰 번호 + 설명 + 화면 사진), 영상 */
+.steps { list-style: none; padding: 0 !important; margin: 0; }
+.step { display: flex; gap: 12px; margin-bottom: 22px !important; }
+.step .num { flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--brand); color: var(--brand-text); font-weight: 800; display: flex; align-items: center; justify-content: center; }
+.step > div { flex: 1; min-width: 0; }
+.step p { margin: 6px 0 0; }
+.shot { display: block; width: 100%; margin-top: 10px; border-radius: 10px; border: 1px solid var(--line); }
+.videos { display: grid; gap: 14px; }
+.video video { display: block; width: 100%; margin-top: 6px; border-radius: 10px; background: #000; aspect-ratio: 16 / 9; }
 /* 사용 안내: 번호 목록과 주소 글자 */
 .guide ol, .guide ul { margin: 0; padding-left: 22px; }
 .guide li { margin-bottom: 8px; }

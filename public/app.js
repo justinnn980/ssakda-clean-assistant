@@ -17,8 +17,9 @@ let quoteFeatures = true;
 // 서버(사무실 맥북)에서 도는지. 서버에서는 노트북 전용 기능(밖에서 접속하기, 카톡 일감 잡기, 프로그램 끄기)을 숨기고,
 // 숨고 채팅은 PC 크롬의 '싹다클린 AI 비서' 확장이 맡는다
 let serverMode = false;
-// 서버에 있는 확장의 버전 (이 브라우저의 확장이 그와 다르면 업데이트하라고 알린다)
+// 서버에 있는 확장의 버전 (이 브라우저의 확장이 그와 다르면 업데이트하라고 알린다), 크롬 웹스토어 주소(올렸을 때만)
 let extLatest = '';
+let extStore = '';
 // 이 브라우저에 설치된 확장의 버전. 없으면 빈 글 (확장의 site.js가 표시해 둔다)
 const extVersion = () => document.documentElement.dataset.ssakdaExt || '';
 // 확장에 일을 시킨다: start(켜기, 숨고 창을 띄움), stop(끄기), open(창 열기), show(그 채팅방 탭 보기)
@@ -848,19 +849,45 @@ async function renderSettings() {
 }
 
 // ---------- 사용 안내 (서버에서 돌 때) ----------
-// PC 크롬 확장을 설치하고 쓰는 방법. 이 브라우저에 확장이 있는지도 보여준다
+// PC 크롬 확장을 설치하고 쓰는 방법. 영상 두 편(처음 설치하기, 매일 쓰는 법)과 단계마다 실제 화면 사진을 보여준다.
+// 웹스토어 주소(extStore)가 있으면 설치는 '웹스토어에서 추가하기' 한 번으로 바뀐다. 이 브라우저에 확장이 있는지도 맨 위에 보여준다
 function renderGuide() {
   clearInterval(pollTimer);
   const ext = extVersion();
   const extState = !ext
-    ? '<span class="dot wait"></span>이 브라우저에는 확장이 아직 없습니다. 아래 "처음 한 번"을 따라 설치해 주세요.'
+    ? '<span class="dot wait"></span>이 브라우저에는 확장이 아직 없습니다. 아래 "처음 한 번: 확장 설치"를 따라 해 주세요.'
     : extLatest && ext !== extLatest
       ? `<span class="dot bad"></span>확장이 설치되어 있지만 옛 버전(${esc(ext)})입니다. 아래 "확장 업데이트"를 따라 해 주세요.`
       : `<span class="dot on"></span>이 브라우저에 확장이 설치되어 있습니다(버전 ${esc(ext)}).`;
+  // 단계 하나: 번호, 제목, 설명, 사진(누르면 크게)
+  const step = (n, title, text, shot) => `<li class="step"><span class="num">${n}</span><div><b>${title}</b>${text ? `<p>${text}</p>` : ''}${
+    shot ? `<a href="/guide/${shot}" target="_blank"><img class="shot" src="/guide/${shot}" alt="${title}" loading="lazy"></a>` : ''}</div></li>`;
+  const video = (name, title) => `<div class="video"><b>${title}</b><video controls preload="none" playsinline poster="/guide/${name}-poster.jpg" src="/guide/${name}.mp4"></video></div>`;
+  const install = extStore
+    ? `<ol class="steps">
+        ${step(1, '아래 버튼을 누릅니다', '크롬 웹스토어의 싹다클린 AI 비서 페이지가 열립니다. 예전에 파일로 설치한 확장이 있으면 chrome://extensions 에서 먼저 <b>삭제</b>해 주세요.<p><a class="btn primary" href="${esc(extStore)}" target="_blank">크롬 웹스토어에서 확장 추가하기</a></p>')}
+        ${step(2, '"Chrome에 추가"를 누릅니다', '확인 창이 뜨면 "확장 프로그램 추가"를 누릅니다. 끝입니다. 다음부터는 저절로 업데이트됩니다.')}
+        ${step(3, '이 사이트를 새로고침합니다', '맨 위에 "설치되어 있습니다"가 보이면 됩니다.', '7-site-ok.jpg')}
+      </ol>`
+    : `<ol class="steps">
+        ${step(1, '확장 파일 받기', '아래 버튼을 누르면 <b>ssakda-extension.zip</b> 파일이 다운로드 폴더에 받아집니다.<p><a class="btn primary" href="/api/extension.zip">확장 파일 받기</a></p>', '1-download.jpg')}
+        ${step(2, '압축 풀기', '받은 파일을 <b>마우스 오른쪽 버튼</b>으로 누르고 <b>모두 압축 풀기...</b> → <b>압축 풀기</b>를 누릅니다. 같은 이름의 폴더가 생깁니다. 이 폴더는 <b>지우지 마세요</b>.', '2-unzip.jpg')}
+        ${step(3, '크롬 확장 화면을 열고 개발자 모드 켜기', `크롬 주소창에 아래 주소를 붙여넣고 Enter를 누른 뒤, 오른쪽 위의 <b>개발자 모드</b>를 켭니다.<p><code>chrome://extensions</code> <button class="btn small" id="copyExt">주소 복사</button></p>`, '3-devmode.jpg')}
+        ${step(4, '"압축해제된 확장 프로그램 로드" 누르기', '개발자 모드를 켜면 왼쪽 위에 나타납니다.', '4-load.jpg')}
+        ${step(5, '폴더 고르기', '2번에서 생긴 <b>ssakda-extension</b> 폴더를 한 번 누르고 <b>폴더 선택</b>을 누릅니다.', '5-pick-folder.jpg')}
+        ${step(6, '설치 끝', '싹다클린 AI 비서가 보이면 설치된 것입니다. 크롬 오른쪽 위 퍼즐 모양을 눌러 핀을 꽂아 두면 아이콘이 늘 보입니다.', '6-installed.jpg')}
+        ${step(7, '이 사이트를 새로고침', '맨 위에 "설치되어 있습니다"가 보이면 됩니다.', '7-site-ok.jpg')}
+      </ol>
+      <p class="muted">어려우면 이 화면을 설치를 도와줄 분께 보여 주세요. 처음 한 번만 하면 됩니다.</p>`;
   app.innerHTML = `
   <div class="card guide">
     <h2>사용 안내</h2>
     <div class="state-line">${extState}</div>
+  </div>
+
+  <div class="card guide">
+    <h2>영상으로 보기</h2>
+    <div class="videos">${extStore ? '' : video('install', '처음 설치하기 (1분)')}${video('daily', '매일 쓰는 법 (1분)')}</div>
   </div>
 
   <div class="card guide">
@@ -877,25 +904,16 @@ function renderGuide() {
 
   <div class="card guide">
     <h2>처음 한 번: 확장 설치 (PC 크롬에서)</h2>
-    <ol>
-      <li>아래 버튼을 눌러 확장 파일을 받습니다.<p><a class="btn primary" href="/api/extension.zip">확장 파일 받기</a></p></li>
-      <li>받은 <b>ssakda-extension.zip</b> 파일을 오른쪽 클릭하고 <b>압축 풀기</b>를 누릅니다(맥은 두 번 클릭). 같은 이름의 폴더가 생깁니다. 이 폴더는 지우지 말고 그대로 두세요.</li>
-      <li>크롬 주소창에 아래 주소를 붙여넣고 Enter를 누릅니다.<p><code>chrome://extensions</code> <button class="btn small" id="copyExt">주소 복사</button></p></li>
-      <li>오른쪽 위의 <b>개발자 모드</b> 스위치를 켭니다.</li>
-      <li>왼쪽 위의 <b>압축해제된 확장 프로그램을 로드합니다</b>를 누르고, 2번에서 생긴 폴더를 고릅니다.</li>
-      <li>크롬 오른쪽 위의 퍼즐 모양 아이콘을 누르고, <b>싹다클린 AI 비서</b> 옆의 핀을 누르면 아이콘이 늘 보입니다.</li>
-      <li>이 사이트를 새로고침해서 맨 위 상태가 "설치되어 있습니다"로 바뀌면 끝입니다.</li>
-    </ol>
+    ${install}
   </div>
 
   <div class="card guide">
     <h2>매일 쓰는 법</h2>
-    <ol>
-      <li>PC 크롬에서 이 사이트를 열고, 첫 화면의 <b>숨고 채팅 자동 응대</b>에서 <b>켜기</b>를 누릅니다. 이미 켜져 있으면 <b>창 열기</b>를 누릅니다.</li>
-      <li>숨고 창이 뜹니다. 로그인 화면이면 평소처럼 로그인합니다.</li>
-      <li>숨고 창은 닫지 말고 아래로 내려 두세요. 닫아도 1분 안에 작게 다시 열립니다.</li>
-      <li>숨고 창 아래쪽에 <b>싹다클린 AI 비서 · 새 채팅방을 기다리는 중</b>이 보이면 잘 되고 있는 것입니다.</li>
-      <li>새 채팅방이 생기면 그 방이 새 탭으로 열리고, 잠시 뒤 채팅창에 답장이 써집니다. 읽어 보고 전송을 눌러 주세요.</li>
+    <ol class="steps">
+      ${step(1, '켜기', 'PC 크롬에서 이 사이트를 열고, 첫 화면의 <b>숨고 채팅 자동 응대</b>에서 <b>켜기</b>를 누릅니다. 이미 켜져 있으면 <b>창 열기</b>를 누릅니다.', '8-turn-on.jpg')}
+      ${step(2, '숨고 로그인', '숨고 창이 뜹니다. 로그인 화면이면 평소처럼 로그인합니다. 아래쪽에 <b>싹다클린 AI 비서</b> 표시가 보입니다.', '9-soomgo-login.jpg')}
+      ${step(3, '잘 되는지 확인', '이 사이트에 <b>PC 크롬에서 숨고 채팅 확인 중</b>이 보이면 잘 되고 있는 것입니다. 숨고 창은 닫지 말고 아래로 내려 두세요. 닫아도 1분 안에 작게 다시 열립니다.', '10-running.jpg')}
+      ${step(4, '새 채팅방이 생기면', '그 방이 새 탭으로 열리고, 잠시 뒤 채팅창에 답장이 써집니다. 읽어 보고 괜찮으면 <b>전송</b>을 누릅니다.', '11-draft.jpg')}
     </ol>
   </div>
 
@@ -905,20 +923,24 @@ function renderGuide() {
       <dt>PC 크롬에서 비서가 동작하지 않고 있습니다</dt><dd>PC와 크롬이 켜져 있는지, chrome://extensions 에서 싹다클린 AI 비서가 켜져 있는지 확인해 주세요.</dd>
       <dt>확장 아이콘에 빨간 느낌표</dt><dd>아이콘을 눌러 이유를 봅니다. "접속 비밀번호를 넣어 주세요"면 PC 크롬에서 이 사이트에 접속해 비밀번호를 한 번 넣어 주세요.</dd>
       <dt>숨고 로그인이 필요합니다</dt><dd>숨고 창에서 로그인해 주세요. 창이 안 보이면 첫 화면의 창 열기를 누릅니다.</dd>
+      <dt>처리할 문의에 "읽지 못함"</dt><dd>새 채팅방을 열었지만 읽지 못한 것입니다. 숨고에서 그 채팅방을 직접 확인해 주세요.</dd>
       <dt>답장이 써지지 않았습니다</dt><dd>그 문의를 열면 보내지 않은 이유가 적혀 있습니다. 문의 화면의 답장을 복사해 직접 보내도 됩니다.</dd>
     </dl>
   </div>
 
   <div class="card guide">
     <h2>확장 업데이트</h2>
-    <p class="muted">비서가 바뀌어 확장도 새로 받아야 할 때는 첫 화면에 "확장 새 버전이 있습니다"가 뜹니다.</p>
-    <ol>
-      <li>위의 <b>확장 파일 받기</b>로 새 파일을 받습니다.</li>
-      <li>처음 설치한 폴더에 압축을 풀어 덮어씁니다.</li>
-      <li>chrome://extensions 에서 싹다클린 AI 비서의 <b>새로고침(↻)</b> 버튼을 누릅니다.</li>
-    </ol>
+    ${extStore
+      ? '<p class="muted">웹스토어에서 설치한 확장은 저절로 업데이트됩니다.</p>'
+      : `<p class="muted">비서가 바뀌어 확장도 새로 받아야 할 때는 첫 화면에 "확장 새 버전이 있습니다"가 뜹니다.</p>
+    <ol class="steps">
+      ${step(1, '새 파일 받기', '위의 <b>확장 파일 받기</b>로 새 파일을 받습니다.')}
+      ${step(2, '같은 폴더에 덮어쓰기', '처음 설치한 폴더에 압축을 풀어 덮어씁니다.')}
+      ${step(3, '새로고침', 'chrome://extensions 에서 싹다클린 AI 비서의 <b>새로고침(↻)</b> 버튼을 누릅니다.')}
+    </ol>`}
+    <p class="muted"><a href="/privacy.html" target="_blank">개인정보 처리방침</a></p>
   </div>`;
-  document.getElementById('copyExt').onclick = async () => toast((await copyText('chrome://extensions')) ? '복사했습니다. 크롬 주소창에 붙여넣어 주세요.' : '복사가 안 됩니다. 직접 입력해 주세요.');
+  document.getElementById('copyExt')?.addEventListener('click', async () => toast((await copyText('chrome://extensions')) ? '복사했습니다. 크롬 주소창에 붙여넣어 주세요.' : '복사가 안 됩니다. 직접 입력해 주세요.'));
 }
 
 // ---------- 시작 ----------
@@ -954,6 +976,7 @@ async function boot() {
     document.getElementById('newBtn').hidden = !quoteFeatures;
     serverMode = Boolean(state.serverMode);
     extLatest = state.extLatest || '';
+    extStore = state.extStore || '';
     // 서버에서 돌면 맨 위에 '안내' 버튼을 보여준다
     document.getElementById('guideBtn').hidden = !serverMode;
     route();

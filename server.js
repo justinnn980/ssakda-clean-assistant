@@ -375,7 +375,7 @@ if (EXT_RUNNER) {
 
 // ---------- HTTP 도우미 ----------
 // 파일 종류별로 브라우저에 알려줄 형식 이름
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.jpg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.svg': 'image/svg+xml', '.mp4': 'video/mp4' };
 
 // 브라우저에 답을 보낸다. 내용이 자료(객체)면 JSON으로, 글자면 그대로 보낸다. 브라우저가 옛 답을 저장해 두고 다시 쓰지 않게 한다
 function send(res, status, body, headers = {}) {
@@ -422,13 +422,22 @@ function authed(req) {
 const loginFails = new Map();
 const allFails = { n: 0, since: 0, until: 0 };
 
-// 파일 하나를 읽어 브라우저에 보낸다. 없으면 '찾을 수 없습니다'
-async function serveFile(res, file) {
+// 파일 하나를 읽어 브라우저에 보낸다. 없으면 '찾을 수 없습니다'.
+// 영상은 브라우저가 일부분만 달라고 하면(Range) 그 부분만 보낸다 (아이폰 사파리는 이렇게 받아야 재생한다)
+async function serveFile(res, file, req = null) {
+  let body;
   try {
-    send(res, 200, await readFile(file), { 'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream' });
+    body = await readFile(file);
   } catch {
-    send(res, 404, '찾을 수 없습니다.');
+    return send(res, 404, '찾을 수 없습니다.');
   }
+  const type = TYPES[path.extname(file)] || 'application/octet-stream';
+  const range = type.startsWith('video/') && /^bytes=(\d*)-(\d*)$/.exec(req?.headers.range || '');
+  if (!range) return send(res, 200, body, { 'Content-Type': type, ...(type.startsWith('video/') ? { 'Accept-Ranges': 'bytes' } : {}) });
+  const start = range[1] ? Number(range[1]) : Math.max(0, body.length - Number(range[2]));
+  const end = range[1] && range[2] ? Math.min(Number(range[2]), body.length - 1) : body.length - 1;
+  if (start > end || start >= body.length) return send(res, 416, '', { 'Content-Range': `bytes */${body.length}` });
+  send(res, 206, body.subarray(start, end + 1), { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Content-Range': `bytes ${start}-${end}/${body.length}` });
 }
 
 // 화면에서 바꿀 수 있는 문의 상태: 승인 대기, 전송 완료, 보류, 거절, 예약 확정
@@ -478,7 +487,7 @@ async function handle(req, res) {
     const file = path.join(ROOT, 'public', rel);
     // public 폴더 밖의 파일을 달라는 요청은 거절한다
     if (!file.startsWith(path.join(ROOT, 'public') + path.sep)) return send(res, 404, '찾을 수 없습니다.');
-    return serveFile(res, file);
+    return serveFile(res, file, req);
   }
 
   // 여기부터는 로그인한 사람만 쓸 수 있다
@@ -572,7 +581,7 @@ async function handle(req, res) {
   // 확장 파일 내려받기 (PC 크롬에 설치할 때). extension 폴더를 압축해서 바로 보낸다
   if (EXT_RUNNER && method === 'GET' && p === '/api/extension.zip') {
     res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': 'attachment; filename="ssakda-extension.zip"', 'Cache-Control': 'no-store' });
-    const zip = spawn('zip', ['-r', '-q', '-X', '-', '.'], { cwd: path.join(ROOT, 'extension') });
+    const zip = spawn('zip', ['-r', '-q', '-X', '-', '.', '-x', '.*'], { cwd: path.join(ROOT, 'extension') });
     zip.stdout.pipe(res);
     zip.on('error', () => res.end());
     return;
@@ -905,6 +914,7 @@ async function applySettings(next) {
   await writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
 
+// 크롬 웹스토어에 확장을 올렸으면 .env의 EXT_STORE_URL에 그 주소를 적는다. 그러면 안내 페이지가 '웹스토어에서 추가하기'로 바뀐다
 // 서버에 있는 확장(extension 폴더)의 버전. 사장님 PC의 확장이 이와 다르면 화면에서 업데이트하라고 알린다
 let extLatest = '';
 try {
@@ -921,7 +931,7 @@ try {
 }
 // 화면에 보여줄 지금 상태를 한데 모은다: 설정, 버전, 견적 기능을 보여줄지, 서버에서 도는지, 확장이 맡는지, 외부 접속 주소와 안내, 숨고 상태, 숨고 채팅 상태, 카톡 상태
 // 확장이 맡을 때 숨고 채팅 상태는 확장이 알려 준 것이고, extRunner로 화면에 알린다
-const featureState = () => ({ settings, version, quoteFeatures: QUOTE_FEATURES, serverMode: SERVER_MODE, extRunner: EXT_RUNNER, extLatest, tunnelUrl: tunnel.url, tunnelNote: tunnel.note, soomgo: soomgo.status, chat: EXT_RUNNER ? extStatus : soomgo.chatStatus, talk: kakaotalk.status });
+const featureState = () => ({ settings, version, quoteFeatures: QUOTE_FEATURES, serverMode: SERVER_MODE, extRunner: EXT_RUNNER, extLatest, extStore: process.env.EXT_STORE_URL || '', tunnelUrl: tunnel.url, tunnelNote: tunnel.note, soomgo: soomgo.status, chat: EXT_RUNNER ? extStatus : soomgo.chatStatus, talk: kakaotalk.status });
 
 // 서버의 프로세스 번호를 적어 두는 파일. stop.sh가 이 번호로 프로그램을 끈다
 const PID_FILE = path.join(store.DATA_DIR, 'server.pid');
