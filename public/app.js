@@ -934,13 +934,15 @@ function renderGuide() {
       ? '<p class="muted">웹스토어에서 설치한 확장은 저절로 업데이트됩니다.</p>'
       : `<p class="muted">비서가 바뀌어 확장도 새로 받아야 할 때는 첫 화면에 "확장 새 버전이 있습니다"가 뜹니다.</p>
     <ol class="steps">
-      ${step(1, '새 파일 받기', '위의 <b>확장 파일 받기</b>로 새 파일을 받습니다.')}
-      ${step(2, '같은 폴더에 덮어쓰기', '처음 설치한 폴더에 압축을 풀어 덮어씁니다.')}
-      ${step(3, '새로고침', 'chrome://extensions 에서 싹다클린 AI 비서의 <b>새로고침(↻)</b> 버튼을 누릅니다.')}
+      ${step(1, '새 파일 받기', '아래 버튼을 누르면 새 <b>ssakda-extension.zip</b> 파일이 다운로드 폴더에 받아집니다.<p><a class="btn primary" href="/api/extension.zip">확장 파일 받기</a></p>', '1-download.jpg')}
+      ${step(2, '같은 폴더에 압축 풀기', '받은 파일을 <b>마우스 오른쪽 버튼</b>으로 누르고 <b>모두 압축 풀기...</b>를 누릅니다. 폴더 이름이 처음 설치한 폴더와 같은 <b>ssakda-extension</b>인지 보고, 끝에 <b>(1)</b> 같은 숫자가 붙어 있으면 지운 뒤 <b>압축 풀기</b>를 누릅니다.', 'u2-unzip-same.jpg')}
+      ${step(3, '덮어쓰기', '"파일 바꾸기 또는 건너뛰기" 창이 뜨면 <b>대상 폴더의 파일 덮어쓰기</b>를 누릅니다. 이 창이 안 뜨면 폴더 이름이 달랐던 것이니 2번을 다시 확인해 주세요.', 'u3-replace.jpg')}
+      ${step(4, '확장 새로고침', `크롬 주소창에 아래 주소를 붙여넣고 Enter를 누른 뒤, 싹다클린 AI 비서의 <b>동그란 화살표</b> 버튼을 누릅니다.<p><code>chrome://extensions</code> <button class="btn small" id="copyExt2">주소 복사</button></p>`, 'u4-reload.jpg')}
+      ${step(5, '이 사이트를 새로고침', '맨 위에 "설치되어 있습니다"가 보이면 끝입니다.', '7-site-ok.jpg')}
     </ol>`}
     <p class="muted"><a href="/privacy.html" target="_blank">개인정보 처리방침</a></p>
   </div>`;
-  document.getElementById('copyExt')?.addEventListener('click', async () => toast((await copyText('chrome://extensions')) ? '복사했습니다. 크롬 주소창에 붙여넣어 주세요.' : '복사가 안 됩니다. 직접 입력해 주세요.'));
+  for (const id of ['copyExt', 'copyExt2']) document.getElementById(id)?.addEventListener('click', async () => toast((await copyText('chrome://extensions')) ? '복사했습니다. 크롬 주소창에 붙여넣어 주세요.' : '복사가 안 됩니다. 직접 입력해 주세요.'));
 }
 
 // ---------- 시작 ----------
