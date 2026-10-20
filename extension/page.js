@@ -81,14 +81,15 @@ window.__ssakdaPage = (() => {
   const findBox = () => [...document.querySelectorAll('textarea, [contenteditable="true"]')].filter(visible).at(-1) || null;
   const boxText = (box) => ('value' in box ? box.value : box.innerText);
   // 입력칸에 글을 넣는다. 숨고 화면(React)이 알아채도록 사람이 친 것과 같은 알림(input)을 보낸다
+  // 먼저 사람이 친 것처럼 넣고(insertText: 숨고 화면이 글자가 들어온 것을 확실히 알아채 전송 버튼을 켠다), 안 되면 값을 직접 넣는다
   function setText(box, text) {
     box.focus();
-    if (box instanceof HTMLTextAreaElement) {
+    if (box instanceof HTMLTextAreaElement) box.select();
+    else document.execCommand('selectAll');
+    document.execCommand('insertText', false, text);
+    if (box instanceof HTMLTextAreaElement && box.value !== text) {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(box, text);
       box.dispatchEvent(new Event('input', { bubbles: true }));
-    } else {
-      document.execCommand('selectAll');
-      document.execCommand('insertText', false, text);
     }
   }
 
@@ -107,17 +108,39 @@ window.__ssakdaPage = (() => {
 
   // 전송 버튼: '전송'이나 '보내기'라고 적힌(또는 그런 이름표가 붙은) 버튼.
   // 없으면 입력칸 바로 오른쪽, 같은 높이에 있는 가장 가까운 버튼(숨고 웹은 글자 없는 동그란 ↑ 아이콘 버튼이다)
+  // 누를 수 있는 것들: 버튼, 그리고 아이콘(svg)이 든 손가락 모양 칸(버튼이 아닌 칸으로 만든 화면도 있다)
+  function clickables() {
+    const set = new Set(document.querySelectorAll('button, [role="button"]'));
+    for (const svg of document.querySelectorAll('svg')) {
+      let el = svg.parentElement;
+      for (let i = 0; el && i < 3; i++, el = el.parentElement) if (getComputedStyle(el).cursor === 'pointer') { set.add(el); break; }
+    }
+    return [...set].filter(visible);
+  }
+  // 입력칸 오른쪽(120픽셀 안), 같은 높이이거나 입력칸 아래쪽 끝 근처에 있는 것
+  const besideBox = (r, q) => q.left >= r.right - 8 && q.left - r.right < 120 && q.top + q.height / 2 > r.top - 10 && q.top + q.height / 2 < r.bottom + 60;
   function findSendButton(box) {
-    const buttons = [...document.querySelectorAll('button, [role="button"]')].filter(visible);
+    const buttons = clickables();
     const named = buttons.filter((b) => /^\s*(전송|보내기)\s*$/.test(b.innerText) || /전송|보내|send/i.test(b.getAttribute('aria-label') || '')).at(-1);
     if (named) return named;
     const r = box.getBoundingClientRect();
     const near = buttons
       .map((b) => ({ b, q: b.getBoundingClientRect() }))
       .filter(({ b }) => !b.contains(box) && !box.contains(b) && !b.innerText.trim())
-      .filter(({ q }) => q.left >= r.right - 8 && q.left - r.right < 120 && q.top + q.height / 2 > r.top - 10 && q.top + q.height / 2 < r.bottom + 10)
+      .filter(({ q }) => besideBox(r, q))
       .sort((x, y) => x.q.left - y.q.left);
     return near[0]?.b || null;
+  }
+  // 전송 버튼을 못 찾았을 때 고치는 데 쓸 기록: 입력칸 자리와 그 주변(입력칸 아래쪽 200픽셀 안)의 누를 수 있는 것들
+  function sendDiag(box) {
+    const rect = (q) => `${Math.round(q.left)},${Math.round(q.top)} ${Math.round(q.width)}x${Math.round(q.height)}`;
+    const r = box.getBoundingClientRect();
+    const near = [...document.querySelectorAll('button, [role="button"], svg')]
+      .map((el) => ({ el, q: el.getBoundingClientRect() }))
+      .filter(({ q }) => q.width && Math.abs(q.top + q.height / 2 - (r.top + r.height / 2)) < r.height / 2 + 200)
+      .slice(-15)
+      .map(({ el, q }) => `${el.tagName.toLowerCase()}${el.disabled ? '[disabled]' : ''}${el.getAttribute('aria-disabled') === 'true' ? '[aria-disabled]' : ''} ${rect(q)} cls=${String(el.getAttribute('class') || '').slice(0, 60)} label=${el.getAttribute('aria-label') || ''} text=${(el.innerText || '').trim().slice(0, 10)}`);
+    return `창 ${innerWidth}x${innerHeight}, 입력칸 ${box.tagName.toLowerCase()} ${rect(r)}\n${near.join('\n')}`;
   }
 
   // 채팅창에 답장을 써 넣고 전송한다. 한 번만 누르고, 보내졌는지 확인되지 않으면 더 누르지 않는다
@@ -130,7 +153,7 @@ window.__ssakdaPage = (() => {
       const b = findSendButton(box);
       return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' ? b : null;
     }, 3000);
-    if (!btn) return { prepared: true, note: '전송 버튼을 찾지 못해 채팅창에 써 두기만 했습니다. 확인하고 전송을 눌러주세요.' };
+    if (!btn) return { prepared: true, note: '전송 버튼을 찾지 못해 채팅창에 써 두기만 했습니다. 확인하고 전송을 눌러주세요.', diag: sendDiag(box) };
     btn.click();
     // 보내졌다는 표시: 입력칸이 비워지고 보낸 글이 화면에 나타났다 (15초까지)
     const head = String(text).trim().split('\n')[0].slice(0, 20);

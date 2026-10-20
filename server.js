@@ -677,7 +677,7 @@ async function handle(req, res) {
       log('숨고 채팅에 첫 응대를 자동으로 보냄 (PC 크롬)');
     } else if (body.prepared) {
       inq.autoSend = { sent: false, prepared: true, reason: body.note ? String(body.note).slice(0, 200) : '숨고 채팅창에 답장을 써 두었습니다. PC 크롬의 숨고 창에서 확인하고 전송을 눌러주세요.', at };
-      log('숨고 채팅창에 답장을 써 둠 (PC 크롬)');
+      log('숨고 채팅창에 답장을 써 둠 (PC 크롬)', body.diag ? String(body.diag).slice(0, 3000) : undefined);
     } else {
       skipChat(inq, `보내지 못했습니다. ${String(body.error || '').slice(0, 200)}`.trim());
     }
