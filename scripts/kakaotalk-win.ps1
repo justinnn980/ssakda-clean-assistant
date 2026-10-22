@@ -27,6 +27,8 @@ public static class KakaoWin {
   [DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, uint d, IntPtr e);
   [DllImport("user32.dll")] public static extern void keybd_event(byte k, byte s, uint f, IntPtr e);
+  [DllImport("user32.dll")] public static extern int GetWindowThreadProcessId(IntPtr h, out int pid);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   public struct RECT { public int L, T, R, B; }
   public struct POINT { public int X, Y; }
 }
@@ -51,6 +53,10 @@ function Out-Json($obj) { [Console]::Out.WriteLine(($obj | ConvertTo-Json -Compr
 
 # 글자를 비교할 때 띄어쓰기·괄호·이모티콘처럼 글자 인식이 자주 틀리는 것을 뺀다(한글·영문·숫자만 남긴다)
 function Squash([string]$s) { ($s -replace '[^0-9A-Za-z가-힣]', '') }
+
+# 사람·방 이름을 견줄 때 쓰는 열쇠. 이름 끝의 이모티콘을 글자 인식이 'O' 같은 영문으로 읽기도 해서(❤️ → O),
+# 한글이 든 이름은 한글·숫자만 견준다. 한글이 없는 이름은 Squash 그대로. 앞부분만 같은 이름(김철/김철수)은 다른 이름이다
+function Name-Key([string]$s) { if ($s -match '[가-힣]') { $s -replace '[^0-9가-힣]', '' } else { Squash $s } }
 
 # ---------- 카카오톡 창 찾기 ----------
 
@@ -89,7 +95,7 @@ function Show-NoActivate($win) {
 function Find-ChatWindow([string]$name) {
   $wins = @(Get-KakaoWindows | Where-Object { $_.Name -ne '카카오톡' })
   $win = $wins | Where-Object { $_.Name -eq $name } | Select-Object -First 1
-  if (-not $win -and (Squash $name)) { $win = $wins | Where-Object { (Squash $_.Name) -eq (Squash $name) } | Select-Object -First 1 }
+  if (-not $win -and (Name-Key $name)) { $win = $wins | Where-Object { (Name-Key $_.Name) -eq (Name-Key $name) } | Select-Object -First 1 }
   if ($win) { Show-NoActivate $win }
   $win
 }
@@ -204,11 +210,13 @@ function Read-Messages($win) {
     # 위에서부터 차례로 글을 만든다. 다른 사람 글은 바로 위에 이름이 있고, 같은 사람이 이어 쓴 글에는 이름이 없다
     $msgs = New-Object System.Collections.ArrayList
     $sender = '?'
+    $senderAt = $null
     $cur = $null
     foreach ($r in ($runs | Sort-Object Top, LeftInList)) {
       if ($r.Kind -eq 'label') {
         # 왼쪽에 있는 바탕 글자 가운데 시각·날짜가 아닌 것이 올린 사람 이름이다
-        if (-not (Is-Noise $r.Text) -and $r.LeftInList -lt $width * 0.4) { $sender = $r.Text.Trim(); $cur = $null }
+        # 이름의 자리도 기억해 둔다(그 왼쪽의 프로필 사진을 눌러 개인톡을 열 때 쓴다)
+        if (-not (Is-Noise $r.Text) -and $r.LeftInList -lt $width * 0.4) { $sender = $r.Text.Trim(); $senderAt = @{ X = $r.X; Y = $r.Top }; $cur = $null }
         continue
       }
       # 같은 말풍선의 다음 줄이면 이어 붙이고, 아니면 새 글로 시작한다. 두 줄 사이가 끊김 없이 말풍선 색이면 같은 말풍선이다(빈 줄이 든 글도 하나로 읽게)
@@ -216,15 +224,15 @@ function Read-Messages($win) {
         $cur.Lines += $r.Text; $cur.Bottom = [Math]::Max($cur.Bottom, $r.Bottom); $cur.X = $r.X; continue
       }
       # 내 글 다음에 오는 다른 사람 글에는 반드시 이름이 붙으므로, 내 글을 만나면 올린 사람을 모르는 상태로 돌린다
-      if ($r.Kind -eq 'mine') { $sender = '?' }
-      $cur = [pscustomobject]@{ Kind = $r.Kind; Sender = $(if ($r.Kind -eq 'mine') { '' } else { $sender }); Lines = @($r.Text); Bottom = $r.Bottom; X = $r.X }
+      if ($r.Kind -eq 'mine') { $sender = '?'; $senderAt = $null }
+      $cur = [pscustomobject]@{ Kind = $r.Kind; Sender = $(if ($r.Kind -eq 'mine') { '' } else { $sender }); At = $(if ($r.Kind -eq 'mine') { $null } else { $senderAt }); Lines = @($r.Text); Bottom = $r.Bottom; X = $r.X }
       [void]$msgs.Add($cur)
     }
     foreach ($m in $msgs) {
       $body = ($m.Lines -join "`n").Trim()
       # 답장(댓글)은 인용된 원래 글까지 함께 읽혀서, "마감" 같은 답장이 일감 글로 잡히지 않게 통째로 뺀다
       if ($body -match '에게\s*답장') { continue }
-      if ($body) { [pscustomobject]@{ text = $body; sender = $m.Sender } }
+      if ($body) { [pscustomobject]@{ text = $body; sender = $m.Sender; at = $m.At } }
     }
   } finally { $shot.Bmp.Dispose() }
 }
@@ -309,13 +317,13 @@ function Send-To($win, [string]$text) {
   @{ sent = $true }
 }
 
-# 화면의 (x, y) 자리를 실제 마우스로 두 번 누르고, 마우스를 원래 자리로 돌려놓는다
-function Double-Click([int]$x, [int]$y) {
+# 화면의 (x, y) 자리를 실제 마우스로 times번 누르고, 마우스를 원래 자리로 돌려놓는다
+function Mouse-Click([int]$x, [int]$y, [int]$times = 1) {
   $here = New-Object KakaoWin+POINT
   [void][KakaoWin]::GetCursorPos([ref]$here)
   [void][KakaoWin]::SetCursorPos($x, $y)
   Start-Sleep -Milliseconds 80
-  for ($n = 0; $n -lt 2; $n++) {
+  for ($n = 0; $n -lt $times; $n++) {
     [KakaoWin]::mouse_event(0x02, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 30
     [KakaoWin]::mouse_event(0x04, 0, 0, 0, [IntPtr]::Zero); Start-Sleep -Milliseconds 60
   }
@@ -350,15 +358,15 @@ function Open-ExistingChat([string]$name) {
   foreach ($ln in $lines) {
     $ws = @($ln.Words | Sort-Object X)
     $names = @($ws | Where-Object { $_.Text -notmatch '^\d+$' })
-    if (-not $names.Count -or (Squash (($names | ForEach-Object Text) -join '')) -ne (Squash $name)) { continue }
+    if (-not $names.Count -or (Name-Key (($names | ForEach-Object Text) -join '')) -ne (Name-Key $name)) { continue }
     if ($ws | Where-Object { $_.Text -match '^\d+$' }) { continue }
     $before = @(Get-KakaoWindows | ForEach-Object { $_.Hwnd })
     Bring-Front $main
-    Double-Click ([int]($shot.Left + $names[0].X + $names[0].W / 2)) ([int]($shot.Top + $names[0].Y + $names[0].H / 2))
+    Mouse-Click ([int]($shot.Left + $names[0].X + $names[0].W / 2)) ([int]($shot.Top + $names[0].Y + $names[0].H / 2)) 2
     # 그 이름의 창이 뜰 때까지 3초까지 기다린다
     for ($n = 0; $n -lt 15; $n++) {
       Start-Sleep -Milliseconds 200
-      $win = Get-KakaoWindows | Where-Object { $before -notcontains $_.Hwnd -and (Squash $_.Name) -eq (Squash $name) } | Select-Object -First 1
+      $win = Get-KakaoWindows | Where-Object { $before -notcontains $_.Hwnd -and (Name-Key $_.Name) -eq (Name-Key $name) } | Select-Object -First 1
       if ($win) { return @{ Win = $win; WasOpen = $false } }
     }
     return $null
@@ -366,11 +374,70 @@ function Open-ExistingChat([string]$name) {
   $null
 }
 
+# 일감 글 올린 사람의 프로필 사진을 눌러 프로필 창을 띄우고, 그 아래쪽의 "1:1 채팅" 버튼을 눌러 1:1 채팅 창을 연다.
+# 프로필 사진은 이름 줄 바로 왼쪽에 있다(이름 왼쪽 끝에서 38점 왼쪽, 23점 아래가 사진 한가운데. 2026-10-22 확인).
+# 프로필 창은 접근성 창 목록에 나오지 않아 맨 앞 창으로 찾고, 버튼은 그 창 아래쪽을 찍어 글자로 찾는다.
+# 오픈채팅방이면 프로필에 "1:1 채팅"이 없어서 프로필 창을 닫고 사유를 던진다.
+function Chat-ViaProfile($roomWin, $row, [string]$sender) {
+  if (-not $row.at) { throw '글 올린 사람의 프로필 사진 자리를 찾지 못했습니다.' }
+  $list = Find-Child $roomWin 'EVA_VH_ListControl_Dblclk'
+  $r = New-Object KakaoWin+RECT; [void][KakaoWin]::GetWindowRect($roomWin.Hwnd, [ref]$r)
+  $x = [int]($r.L + $row.at.X - 38); $y = [int]($r.T + $row.at.Y + 23)
+  # 사진이 글 목록 칸 밖(제목이나 입력칸 쪽)이면 누르지 않는다
+  $lr = $list.Current.BoundingRectangle
+  if ($y - 20 -lt $lr.Y -or $y + 20 -gt $lr.Y + $lr.Height -or $x -lt $r.L) { throw '일감 글이 채팅방 화면 밖에 있어 프로필을 누르지 못했습니다.' }
+  $before = @(Get-KakaoWindows | ForEach-Object { $_.Hwnd })
+  $kakaoPid = (Get-Kakao).Id
+  Bring-Front $roomWin
+  Mouse-Click $x $y
+  # 새로 앞에 뜬 카카오톡 창(프로필 창)을 3초까지 기다린다
+  $popup = [IntPtr]::Zero
+  for ($n = 0; $n -lt 15 -and $popup -eq [IntPtr]::Zero; $n++) {
+    Start-Sleep -Milliseconds 200
+    $fg = [KakaoWin]::GetForegroundWindow(); $fgPid = 0; [void][KakaoWin]::GetWindowThreadProcessId($fg, [ref]$fgPid)
+    if ($fgPid -eq $kakaoPid -and $fg -ne $roomWin.Hwnd -and $before -notcontains $fg) { $popup = $fg }
+  }
+  if ($popup -eq [IntPtr]::Zero) { throw '프로필 창이 뜨지 않았습니다.' }
+  Start-Sleep -Milliseconds 400
+  # 프로필 창 아래쪽(버튼이 있는 띠)에서 "1:1 채팅" 글자를 찾는다
+  $shot = Capture ([pscustomobject]@{ Hwnd = $popup })
+  try {
+    $strip = [Math]::Min(150, $shot.Bmp.Height)
+    $words = @(Read-Words $shot.Bmp 0 ($shot.Bmp.Height - $strip) $shot.Bmp.Width $strip)
+  } finally { $shot.Bmp.Dispose() }
+  $hit = $null
+  foreach ($g in ($words | Group-Object Line)) {
+    $ws = @($g.Group)
+    if ((Squash (($ws | ForEach-Object Text) -join '')) -notmatch '11채팅|1채팅') { continue }
+    $hit = $ws | Where-Object { $_.Text -match '채팅' } | Select-Object -First 1
+    if ($hit) { break }
+  }
+  if (-not $hit) {
+    [void][KakaoWin]::PostMessage($popup, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+    throw '프로필 창에 "1:1 채팅" 버튼이 없습니다(오픈채팅방일 수 있습니다).'
+  }
+  Mouse-Click ([int]($shot.Left + $hit.X + $hit.W / 2)) ([int]($shot.Top + $hit.Y + $hit.H / 2))
+  # 1:1 채팅 창: 올린 사람 이름의 창(4초까지 기다린다)
+  for ($n = 0; $n -lt 20; $n++) {
+    Start-Sleep -Milliseconds 200
+    $win = Get-KakaoWindows | Where-Object { $_.Hwnd -ne $roomWin.Hwnd -and (Name-Key $_.Name) -eq (Name-Key $sender) } | Select-Object -First 1
+    if ($win) {
+      # 프로필 창이 남아 있으면 닫는다
+      if ([KakaoWin]::IsWindowVisible($popup)) { [void][KakaoWin]::PostMessage($popup, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
+      return @{ Win = $win; WasOpen = ($before -contains $win.Hwnd) }
+    }
+  }
+  if ([KakaoWin]::IsWindowVisible($popup)) { [void][KakaoWin]::PostMessage($popup, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
+  throw '1:1 채팅 창이 열리지 않았습니다.'
+}
+
 # room 방에서 본문이 rowText인 글을 올린 사람에게 1:1 채팅으로 text를 보낸다.
-# 윈도우에서는 프로필에서 대화를 거는 대신, 그 사람과 이미 만들어 둔 1:1 채팅방(열린 창이나 채팅 목록)으로 보낸다.
+# 그 사람 이름의 창이 이미 열려 있으면 그 창으로, 아니면 프로필에서 1:1 채팅을 연다(via 'profile').
+# 프로필로 열지 못하면(오픈채팅방 등) 그 사람과 이미 만들어 둔 1:1 채팅방을 채팅 목록에서 찾아 보낸다(via 'list').
 # 보낼 창을 얻지 못하면 아무 글도 보내지 않고 사유를 돌려준다. dry면 1:1 채팅 창을 여는 데까지만 한다.
 function Cmd-Direct([string]$room, [string]$text, [string]$rowText, [bool]$dry) {
-  $msgs = @(Read-Messages (Get-RoomWindow $room))
+  $roomWin = Get-RoomWindow $room
+  $msgs = @(Read-Messages $roomWin)
   # 마지막 12개에서 본문이 같은 일감 글을 아래에서부터 찾는다
   $row = $null
   for ($i = $msgs.Count - 1; $i -ge [Math]::Max(0, $msgs.Count - 12) -and -not $row; $i--) {
@@ -380,14 +447,28 @@ function Cmd-Direct([string]$room, [string]$text, [string]$rowText, [bool]$dry) 
   if (-not $row.sender) { throw '내가 올린 글이라 보내지 않았습니다.' }
   if ($row.sender -eq '?') { throw '글 올린 사람 이름이 화면 밖에 있어 읽지 못했습니다.' }
   $sender = $row.sender
-  $chat = Open-ExistingChat $sender
-  if (-not $chat) { throw "`"$sender`"님과 만들어 둔 1:1 채팅방을 찾지 못했습니다(윈도우에서는 이미 대화한 적 있는 사람에게만 보낼 수 있습니다)." }
+  # 이름 끝의 이모티콘은 글자 인식이 이상한 글자로 읽어서, 보여 줄 이름에서는 한글·영문·숫자·띄어쓰기만 남긴다
+  $to = ($sender -replace '[^0-9A-Za-z가-힣 ]', '').Trim()
+  # 1) 그 사람 이름의 창이 이미 열려 있으면 그 창(지켜보는 방은 빼고)
+  $chat = $null; $via = 'open'; $why = ''
+  $open = Get-KakaoWindows | Where-Object { $_.Hwnd -ne $roomWin.Hwnd -and $_.Name -ne '카카오톡' -and (Name-Key $_.Name) -eq (Name-Key $sender) } | Select-Object -First 1
+  if ($open) { $chat = @{ Win = $open; WasOpen = $true } }
+  # 2) 프로필에서 1:1 채팅 열기
+  if (-not $chat) {
+    try { $chat = Chat-ViaProfile $roomWin $row $sender; $via = 'profile' } catch { $why = $_.Exception.Message }
+  }
+  # 3) 채팅 목록의 기존 1:1 채팅방
+  if (-not $chat) {
+    $chat = Open-ExistingChat $sender
+    $via = 'list'
+    if (-not $chat) { throw "$why `"$to`"님과 만들어 둔 1:1 채팅방도 채팅 목록에서 찾지 못했습니다." }
+  }
   # 열린 창이 지켜보는 방 자체라면 잘못 보내는 것이므로 멈춘다
-  if ($chat.Win.Name -eq $room) { throw '1:1 채팅 창이 아니라 지켜보는 방이 열려 보내지 않았습니다.' }
+  if ($chat.Win.Hwnd -eq $roomWin.Hwnd -or $chat.Win.Name -eq $room) { throw '1:1 채팅 창이 아니라 지켜보는 방이 열려 보내지 않았습니다.' }
   try {
-    if ($dry) { return @{ sent = $false; opened = $true; to = $sender; via = 'list' } }
+    if ($dry) { return @{ sent = $false; opened = $true; to = $to; via = $via } }
     $out = Send-To $chat.Win $text
-    @{ sent = $out.sent; to = $sender; via = 'list' }
+    @{ sent = $out.sent; to = $to; via = $via }
   } finally {
     # 이번에 새로 연 창이면 닫아서 화면을 원래대로 둔다
     if (-not $chat.WasOpen) { [void][KakaoWin]::PostMessage($chat.Win.Hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
