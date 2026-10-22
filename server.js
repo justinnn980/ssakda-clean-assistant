@@ -71,13 +71,16 @@ const cfg = JSON.parse(readFileSync(path.join(ROOT, 'config.json'), 'utf8'));
 // 코드는 남겨 두었으니 true로 바꾸면 다시 쓸 수 있다
 const QUOTE_FEATURES = false;
 // 서버(사무실 맥북)에서 돌리는지. 서버의 실행 설정(launchd)이 SERVER_MODE=1을 넣어 준다.
-// 노트북에서만 되는 기능(밖에서 접속하기 스위치, 카톡 일감 잡기, 프로그램 끄기)은 쓰지 않는다. 밖에서 접속하는 주소는 서버의 터널이 맡고, .env의 BASE_URL에 적어 둔다
+// 노트북에서만 되는 기능(밖에서 접속하기 스위치, 프로그램 끄기)은 쓰지 않는다. 카톡 일감 잡기는 카카오톡이 있는 PC의 도우미가 맡는다. 밖에서 접속하는 주소는 서버의 터널이 맡고, .env의 BASE_URL에 적어 둔다
 const SERVER_MODE = process.env.SERVER_MODE === '1';
 // 서버에서는 숨고 채팅을 사장님 PC 크롬의 '싹다클린 AI 비서' 확장(extension 폴더)이 맡는다(2026-10-19 사용자 결정). 서버는 숨고 크롬을 띄우지 않는다.
 // 확장이 숨고 창을 띄워 새 채팅방을 열고 그 글을 보내면(/api/ext/...), 서버가 AI로 첫 응대를 써 두고, 확장이 가져가 그 채팅방에 써 넣거나 보낸다
 const EXT_RUNNER = SERVER_MODE;
 // 확장이 마지막으로 알려 준 상태(숨고 채팅 칸에 보여 준다). seenAt은 확장이 마지막으로 연락한 시각이라, 오래되면 PC 크롬이 꺼진 것이다
 let extStatus = { state: 'off', message: '', lastCheck: null, lastNew: null, account: null, work: '', seenAt: null };
+// 서버에는 카카오톡이 없어서, 카톡 일감 잡기는 카카오톡이 있는 PC의 '카톡 일감 도우미'(scripts/kakaotalk-agent.mjs)가 맡는다.
+// 도우미가 몇 초마다 알려 주는 상태(지켜보기 상태·최근 기록·방 목록)와 마지막으로 연락한 시각
+let talkAgent = { state: 'off', message: '', lastCheck: null, events: [], rooms: [], roomsNote: '', seenAt: null };
 
 // ---------- 분석 대기열 (한 번에 한 건씩) ----------
 // 앞의 분석이 끝나야 다음 분석이 시작되도록 줄을 세우는 변수. 처음에는 '이미 끝난 일'로 시작한다
@@ -549,11 +552,35 @@ async function handle(req, res) {
 
   // --- 카톡 일감 잡기: 이 컴퓨터 카카오톡의 채팅방 목록. 읽지 못하면 빈 목록과 사유를 준다 ---
   if (method === 'GET' && p === '/api/talk/rooms') {
+    // 서버에서는 PC 도우미가 알려 준 방 목록을 준다
+    if (SERVER_MODE) {
+      const live = talkAgent.seenAt && Date.now() - new Date(talkAgent.seenAt) < 60 * 1000;
+      return send(res, 200, { rooms: live ? talkAgent.rooms : [], note: live ? talkAgent.roomsNote : 'PC의 카톡 일감 도우미가 켜져 있지 않아 방 목록을 불러오지 못했습니다.' });
+    }
     try {
       return send(res, 200, { rooms: await kakaotalk.rooms() });
     } catch (e) {
       return send(res, 200, { rooms: [], note: e.message });
     }
+  }
+
+  // --- PC 카톡 일감 도우미 (서버에서만) ---
+  // 도우미가 몇 초마다 지금 상태와 방 목록을 알려 주고, 켜 두었는지와 방·찾을 말·보낼 글·보낼 곳을 받아 간다
+  if (SERVER_MODE && method === 'POST' && p === '/api/talk/agent') {
+    const b = await readJson(req, 65536);
+    const text = (v, n) => String(v ?? '').slice(0, n);
+    const events = (Array.isArray(b.events) ? b.events : []).slice(0, 10).map((e) => ({
+      at: text(e?.at, 40), text: text(e?.text, 80), sent: Boolean(e?.sent), note: text(e?.note, 300), to: text(e?.to, 100), ms: Number(e?.ms) || 0,
+    }));
+    const rooms = Array.isArray(b.rooms)
+      ? b.rooms.slice(0, 100).map((r) => ({ name: text(r?.name, 100), members: Number.isInteger(r?.members) ? r.members : null, open: Boolean(r?.open) })).filter((r) => r.name)
+      : talkAgent.rooms;
+    talkAgent = {
+      state: ['off', 'starting', 'ok', 'error'].includes(b.state) ? b.state : 'error',
+      message: text(b.message, 300), lastCheck: b.lastCheck ? text(b.lastCheck, 40) : null, events, rooms,
+      roomsNote: typeof b.roomsNote === 'string' ? text(b.roomsNote, 300) : talkAgent.roomsNote, seenAt: new Date().toISOString(),
+    };
+    return send(res, 200, { kakaoWatch: settings.kakaoWatch, talk: settings.talk });
   }
 
   // --- PC 크롬 확장 (서버에서만) ---
@@ -900,12 +927,8 @@ function startChat() {
 
 // 설정 화면에서 바꾼 값을 받아 바로 적용하고 파일에 저장한다
 async function applySettings(next) {
-  // 서버에서는 노트북 전용 설정(밖에서 접속하기, 카톡 일감 잡기)을 받지 않는다
-  if (SERVER_MODE) {
-    delete next.tunnel;
-    delete next.talk;
-    delete next.kakaoWatch;
-  }
+  // 서버에서는 노트북 전용 설정(밖에서 접속하기)을 받지 않는다. 카톡 일감 잡기 설정은 저장만 하고 PC 도우미가 받아 간다
+  if (SERVER_MODE) delete next.tunnel;
   // 밖에서 접속하기 스위치. 비밀번호가 8자리보다 짧으면 켜지 못하게 한다
   if (typeof next.tunnel === 'boolean' && next.tunnel !== settings.tunnel) {
     if (next.tunnel && PIN.length < 8) throw Object.assign(new Error('밖에서 접속하려면 접속 비밀번호가 8자리 이상이어야 합니다.'), { status: 400 });
@@ -941,8 +964,8 @@ async function applySettings(next) {
     settings.kakaoWatch = next.kakaoWatch;
     talkChanged = true;
   }
-  // 카톡 설정이 바뀌었으면 새 설정으로 다시 시작하거나 멈춘다
-  if (talkChanged) settings.kakaoWatch ? kakaotalk.start(settings.talk) : kakaotalk.stop();
+  // 카톡 설정이 바뀌었으면 새 설정으로 다시 시작하거나 멈춘다 (서버에서는 PC 도우미가 몇 초 안에 받아 가서 한다)
+  if (talkChanged && !SERVER_MODE) settings.kakaoWatch ? kakaotalk.start(settings.talk) : kakaotalk.stop();
   // 바뀐 설정을 파일에 저장한다
   await writeFile(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
@@ -964,7 +987,7 @@ try {
 }
 // 화면에 보여줄 지금 상태를 한데 모은다: 설정, 버전, 견적 기능을 보여줄지, 서버에서 도는지, 확장이 맡는지, 외부 접속 주소와 안내, 숨고 상태, 숨고 채팅 상태, 카톡 상태
 // 확장이 맡을 때 숨고 채팅 상태는 확장이 알려 준 것이고, extRunner로 화면에 알린다
-const featureState = () => ({ settings, version, quoteFeatures: QUOTE_FEATURES, serverMode: SERVER_MODE, extRunner: EXT_RUNNER, extLatest, extStore: process.env.EXT_STORE_URL || '', tunnelUrl: tunnel.url, tunnelNote: tunnel.note, soomgo: soomgo.status, chat: EXT_RUNNER ? extStatus : soomgo.chatStatus, talk: kakaotalk.status });
+const featureState = () => ({ settings, version, quoteFeatures: QUOTE_FEATURES, serverMode: SERVER_MODE, extRunner: EXT_RUNNER, extLatest, extStore: process.env.EXT_STORE_URL || '', tunnelUrl: tunnel.url, tunnelNote: tunnel.note, soomgo: soomgo.status, chat: EXT_RUNNER ? extStatus : soomgo.chatStatus, talk: SERVER_MODE ? talkAgent : kakaotalk.status });
 
 // 서버의 프로세스 번호를 적어 두는 파일. stop.sh가 이 번호로 프로그램을 끈다
 const PID_FILE = path.join(store.DATA_DIR, 'server.pid');

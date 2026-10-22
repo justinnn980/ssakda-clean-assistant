@@ -213,13 +213,18 @@ async function renderList() {
   // 카카오톡 채팅방을 지켜보다가 일감 글이 올라오면 바로 답하는 기능의 켜기·끄기와 최근 기록
   const tk = st.talk;
   const talkOn = st.settings.kakaoWatch;
+  // 서버에서는 카카오톡이 있는 PC의 '카톡 일감 도우미'가 몇 초마다 연락한다. 30초 넘게 연락이 없으면 도우미나 PC가 꺼진 것이다
+  const agentLive = !serverMode || Boolean(tk.seenAt && Date.now() - new Date(tk.seenAt) < 30 * 1000);
+  const agentOff = '<span class="err">PC의 카톡 일감 도우미가 꺼져 있습니다.</span> 카카오톡이 있는 PC에서 바탕화면의 "카톡 일감 도우미"를 켜 주세요. <a href="#/guide">사용 안내</a>';
   const talkLine = !talkOn
-    ? '<span class="dot"></span>꺼져 있습니다. 카카오톡을 건드리지 않습니다.'
-    : tk.state === 'ok'
-      ? `<span class="dot on"></span>${esc(tk.message)} · "${esc(st.settings.talk.keyword)}" 글이 오면 ${st.settings.talk.target === 'direct' ? '올린 사람에게 바로 개인톡을 보냅니다.' : '같은 방에 바로 답합니다.'}`
-      : tk.state === 'error'
-        ? `<span class="dot bad"></span><span class="err">${esc(tk.message)}</span>`
-        : '<span class="dot wait"></span>카카오톡 창을 확인하는 중입니다.';
+    ? `<span class="dot"></span>꺼져 있습니다. 카카오톡을 건드리지 않습니다.${agentLive ? '' : `<br>${agentOff}`}`
+    : !agentLive
+      ? `<span class="dot bad"></span>${agentOff}`
+      : tk.state === 'ok'
+        ? `<span class="dot on"></span>${serverMode ? 'PC에서 ' : ''}${esc(tk.message)} · "${esc(st.settings.talk.keyword)}" 글이 오면 ${st.settings.talk.target === 'direct' ? '올린 사람에게 바로 개인톡을 보냅니다.' : '같은 방에 바로 답합니다.'}`
+        : tk.state === 'error'
+          ? `<span class="dot bad"></span><span class="err">${esc(tk.message)}</span>`
+          : '<span class="dot wait"></span>카카오톡 창을 확인하는 중입니다.';
   // 지금 설정을 한 줄로 요약한다
   const tset = st.settings.talk;
   const talkSummary = tset.room
@@ -232,7 +237,7 @@ async function renderList() {
       ${tk.events.map((ev) => `<div class="muted">${when(ev.at)} · ${esc(ev.text)} → ${ev.sent ? `${ev.to ? `${esc(ev.to)}님에게 개인톡 보냄` : '같은 방에 답장 보냄'} (${(ev.ms / 1000).toFixed(1)}초)` : `<span class="err">못 보냄: ${esc(ev.note)}</span>`}</div>`).join('')}</div>
       <button class="btn ${talkOn ? 'danger' : 'primary'}" id="talkPower">${talkOn ? '끄기' : '켜기'}</button></div></div>`;
   // 화면에 그린다: 숨고 칸, 카톡 칸, 탭(탭마다 문의 수), 문의 카드들(제목·상태·위험도·지역·시각), 카카오 알림 안내
-  app.innerHTML = `${chatNote}${quoteFeatures ? soomgoNote : ''}${serverMode ? '' : talkNote}<div class="tabs">${Object.entries(filters)
+  app.innerHTML = `${chatNote}${quoteFeatures ? soomgoNote : ''}${talkNote}<div class="tabs">${Object.entries(filters)
     .map(([k, v]) => `<button class="tab ${k === listFilter ? 'on' : ''}" data-f="${k}">${v} ${items.filter((i) => match[k].includes(i.status)).length}</button>`)
     .join('')}</div>
     ${shown.length ? '' : `<div class="card muted">해당하는 문의가 없습니다.${quoteFeatures ? ' 오른쪽 위 "새 문의"로 숨고 캡처를 올려주세요.' : ''}</div>`}
@@ -247,14 +252,14 @@ async function renderList() {
       .join('')}${kakaoNote}`;
   // 탭을 누르면 그 탭으로 바꿔 다시 그린다
   app.querySelectorAll('.tab').forEach((b) => (b.onclick = () => ((listFilter = b.dataset.f), renderList())));
-  // '바꾸기'를 누르면 설정 화면의 카톡 칸으로 바로 가게 표시해 둔다 (서버에서는 카톡 칸이 없다)
-  if (!serverMode) document.getElementById('talkEdit').onclick = () => (focusCard = 'talkCard');
-  // 카톡 일감 잡기 켜기·끄기 버튼
-  if (!serverMode) document.getElementById('talkPower').onclick = async (e) => {
+  // '바꾸기'를 누르면 설정 화면의 카톡 칸으로 바로 가게 표시해 둔다
+  document.getElementById('talkEdit').onclick = () => (focusCard = 'talkCard');
+  // 카톡 일감 잡기 켜기·끄기 버튼. 서버에서는 PC 도우미가 몇 초 안에 받아 간다
+  document.getElementById('talkPower').onclick = async (e) => {
     e.target.disabled = true;
     try {
       await api('/api/settings', { kakaoWatch: !talkOn });
-      toast(talkOn ? '카톡 지켜보기를 껐습니다.' : '카톡 지켜보기를 켰습니다.');
+      toast(talkOn ? '카톡 지켜보기를 껐습니다.' : serverMode ? '켰습니다. PC의 카톡 일감 도우미가 몇 초 안에 시작합니다.' : '카톡 지켜보기를 켰습니다.');
     } catch (err) {
       toast(err.message);
     }
@@ -297,7 +302,7 @@ async function renderList() {
   clearInterval(pollTimer);
   const soomgoOn = chatOn || (quoteFeatures && on);
   const soomgoOk = (!chatOn || st.chat.state === 'ok') && (!(quoteFeatures && on) || sg.state === 'ok');
-  const every = items.some((i) => i.status === 'analyzing') || (talkOn && !serverMode) ? 5000 : !soomgoOn ? 0 : soomgoOk ? 30000 : 5000;
+  const every = items.some((i) => i.status === 'analyzing') || talkOn ? 5000 : !soomgoOn ? 0 : soomgoOk ? 30000 : 5000;
   // 첫 화면에 머물러 있을 때만 새로 고친다
   if (every) pollTimer = setInterval(() => location.hash.length <= 2 && renderList(), every);
 }
@@ -722,9 +727,9 @@ async function renderSettings() {
     <div class="state-line">${tunnelLine}</div>
   </div>
 
-  <div class="card" id="talkCard" ${serverMode ? 'hidden' : ''}>
+  <div class="card" id="talkCard">
     <h2>카톡 일감 잡기</h2>
-    <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. 노트북의 카카오톡이 켜져 있어야 하고, 개인톡을 보내는 3초쯤은 마우스가 저절로 움직입니다. 오픈채팅방에서는 프로필로 대화를 걸 수 없어서, 그 사람과 이미 만들어 둔 1:1 채팅방이 있을 때만 그 방으로 보냅니다. 저장하면 바로 적용됩니다.</p>
+    <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. ${serverMode ? '카카오톡이 있는 PC에서 "카톡 일감 도우미"가 켜져 있어야 합니다(<a href="#/guide">사용 안내</a>).' : '노트북의 카카오톡이 켜져 있어야 합니다.'} 보내는 몇 초 동안은 카카오톡 창이 앞으로 나오고 마우스가 저절로 움직일 수 있습니다. 오픈채팅방에서는 프로필로 대화를 걸 수 없어서, 그 사람과 이미 만들어 둔 1:1 채팅방이 있을 때만 그 방으로 보냅니다. 윈도우 PC는 지켜볼 방 창을 열어 두어야 하고(최소화하지 말고), 개인톡은 늘 이미 만들어 둔 1:1 채팅방으로만 보냅니다. 저장하면 바로 적용됩니다.</p>
     <label>지켜볼 채팅방</label>
     <input id="talkRoom" list="talkRooms" value="${esc(st.settings.talk.room)}" placeholder="카카오톡에 보이는 방 이름 그대로" autocomplete="off">
     <datalist id="talkRooms"></datalist>
@@ -814,13 +819,13 @@ async function renderSettings() {
   // 밖에서 접속하기 스위치. 밖에서 접속한 채로 끄면 바로 끊긴다는 것을 먼저 알린다
   document.getElementById('swTunnel').onchange = (e) =>
     change('tunnel', e.target, !e.target.checked && viaTunnel ? '지금 밖에서 접속 중입니다. 끄면 이 화면이 바로 끊기고, 집에 가서 다시 켜야 합니다. 끌까요?' : '');
-  // 방 이름을 직접 치다 틀리지 않게, 이 노트북 카카오톡의 방 목록에서 고를 수 있게 한다 (서버에는 카카오톡이 없다)
-  if (!serverMode) api('/api/talk/rooms')
+  // 방 이름을 직접 치다 틀리지 않게, 카카오톡의 방 목록에서 고를 수 있게 한다 (서버에서는 PC 도우미가 알려 준 목록. 윈도우는 열려 있는 채팅방 창만 나온다)
+  api('/api/talk/rooms')
     .then(({ rooms, note }) => {
       const list = document.getElementById('talkRooms');
       const hint = document.getElementById('talkRoomsNote');
       if (!list || !hint) return;
-      list.innerHTML = rooms.map((r) => `<option value="${esc(r.name)}">${r.open ? '오픈채팅 · ' : ''}${r.members ? `${r.members}명` : '1:1'}</option>`).join('');
+      list.innerHTML = rooms.map((r) => `<option value="${esc(r.name)}">${r.open ? '오픈채팅 · ' : ''}${r.members == null ? '' : r.members ? `${r.members}명` : '1:1'}</option>`).join('');
       hint.textContent = rooms.length ? `방 ${rooms.length}개를 불러왔습니다. 위 칸을 비우고 누르면 목록에서 고를 수 있습니다.` : note || '방 목록을 불러오지 못했습니다. 방 이름을 직접 입력해 주세요.';
     })
     .catch(() => {});
@@ -847,6 +852,10 @@ async function renderSettings() {
   const waiting = (st.settings.chat && st.chat.state !== 'ok') || (quoteFeatures && st.settings.soomgo && sg.state !== 'ok') || (st.settings.tunnel && !st.tunnelUrl);
   if (waiting) pollTimer = setInterval(() => location.hash === '#/settings' && !document.querySelector('.switch input:disabled') && renderSettings(), 4000);
 }
+
+// 카톡 일감 도우미를 카카오톡 PC에 설치하는 PowerShell 명령 한 줄: Node.js·Git 설치 → 프로그램 받기(있으면 최신으로) → 설치 스크립트
+const AGENT_INSTALL =
+  "winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements; winget install -e --id Git.Git --accept-source-agreements --accept-package-agreements; $env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); cd ~; if (Test-Path ssakda-clean-assistant) { git -C ssakda-clean-assistant pull --ff-only } else { git clone https://github.com/justinnn980/ssakda-clean-assistant.git }; powershell -ExecutionPolicy Bypass -File ssakda-clean-assistant/scripts/install-kakaotalk-agent.ps1";
 
 // ---------- 사용 안내 (서버에서 돌 때) ----------
 // PC 크롬 확장을 설치하고 쓰는 방법. 영상 두 편(처음 설치하기, 매일 쓰는 법)과 단계마다 실제 화면 사진을 보여준다.
@@ -883,6 +892,7 @@ function renderGuide() {
   <div class="card guide">
     <h2>사용 안내</h2>
     <div class="state-line">${extState}</div>
+    <p><button class="btn small" id="toTalk">카톡 일감 잡기 안내 보기</button></p>
   </div>
 
   <div class="card guide">
@@ -941,8 +951,53 @@ function renderGuide() {
       ${step(5, '이 사이트를 새로고침', '맨 위에 "설치되어 있습니다"가 보이면 끝입니다.', '7-site-ok.jpg')}
     </ol>`}
     <p class="muted"><a href="/privacy.html" target="_blank">개인정보 처리방침</a></p>
+  </div>
+
+  <div class="card guide" id="talkGuide">
+    <h2>카톡 일감 잡기</h2>
+    <ul>
+      <li>업무 단체방에 <b>찾을 말</b>(예: [방문견적])이 든 새 글이 올라오면, 올린 사람에게 정해 둔 글을 바로 개인톡으로 보냅니다. AI를 거치지 않아 몇 초 안에 보냅니다.</li>
+      <li>이 서버에는 카카오톡이 없어서, <b>카카오톡이 있는 윈도우 PC</b>에 <b>카톡 일감 도우미</b>를 한 번 설치해 둡니다. 켜기·끄기와 설정은 이 사이트(휴대폰도 됨)에서 하고, 도우미가 몇 초 안에 받아 PC 카카오톡을 지켜봅니다.</li>
+      <li>윈도우 카카오톡은 채팅 글을 프로그램에 알려 주지 않아서, 채팅방 창을 화면처럼 찍어 글자를 읽습니다. 그래서 지켜볼 방 창을 <b>열어 두어야</b> 합니다. 다른 창 뒤에 있어도 되지만 <b>최소화하면 안 됩니다</b>.</li>
+      <li>개인톡은 그 사람과 <b>이미 만들어 둔 1:1 채팅방</b>으로 보냅니다. 처음 보는 사람에게는 보내지 않고 이유를 남깁니다.</li>
+      <li>보낼 때는 카카오톡 창이 잠깐 앞으로 나오고 마우스가 저절로 움직일 수 있습니다. 그동안 PC를 만지지 않는 것이 좋습니다.</li>
+    </ul>
+  </div>
+
+  <div class="card guide">
+    <h2>처음 한 번: 카톡 일감 도우미 설치 (카카오톡 PC에서)</h2>
+    <ol class="steps">
+      ${step(1, 'PC 카카오톡에 업무방 계정으로 로그인', '카카오톡 PC 로그인은 한 대만 됩니다. 다른 PC에서 같은 계정으로 쓰고 있으면 그쪽이 로그아웃됩니다.')}
+      ${step(2, 'PowerShell 열기', '키보드의 <b>윈도우 키</b>를 누르고 <b>powershell</b>이라고 친 뒤 Enter를 누릅니다. 파란(또는 검은) 창이 열립니다.')}
+      ${step(3, '아래 명령을 붙여넣고 Enter', `필요한 프로그램(Node.js, Git)을 설치하고, 비서 프로그램을 받아, 바탕화면에 <b>카톡 일감 도우미</b> 아이콘을 만듭니다. 몇 분 걸립니다. 창 안에서 마우스 오른쪽 버튼을 누르면 붙여넣어집니다.<p><code>${esc(AGENT_INSTALL)}</code></p><p><button class="btn small" id="copyAgent">명령 복사</button></p>`)}
+      ${step(4, '접속 비밀번호 넣기', '마지막에 작은 창이 뜨면 이 사이트의 <b>접속 비밀번호</b>를 넣고 확인을 누릅니다. "켜졌습니다"가 뜨면 설치 끝입니다. 다음부터는 PC를 켤 때 저절로 켜집니다.')}
+    </ol>
+    <p class="muted">어려우면 이 화면을 설치를 도와줄 분께 보여 주세요. 처음 한 번만 하면 됩니다.</p>
+  </div>
+
+  <div class="card guide">
+    <h2>카톡 일감 잡기 쓰는 법</h2>
+    <ol class="steps">
+      ${step(1, '지켜볼 방 열어 두기', 'PC 카카오톡에서 업무 단체방을 두 번 눌러 <b>채팅방 창</b>을 엽니다. 창은 닫거나 최소화하지 말고 다른 창 뒤에 두세요. 1:1 개인톡을 보낼 사람들과는 미리 1:1 채팅방이 있어야 합니다.')}
+      ${step(2, '설정 정하기', '이 사이트의 <b>설정 → 카톡 일감 잡기</b>에서 <b>지켜볼 채팅방</b>(칸을 누르면 PC에 열린 방이 나옵니다), <b>찾을 말</b>, <b>보낼 글</b>, <b>보낼 곳</b>을 정하고 <b>저장</b>을 누릅니다. 처음에는 보낼 곳을 "같은 방에 답하기 (시험용)"로 두고 "나와의 채팅" 방으로 시험해 보면 안전합니다.')}
+      ${step(3, '켜기', '첫 화면의 <b>카톡 일감 잡기</b>에서 <b>켜기</b>를 누릅니다. 몇 초 뒤 <b>PC에서 "방 이름" 방을 지켜보는 중</b>이 보이면 잘 되고 있는 것입니다.')}
+      ${step(4, '보낸 기록 보기', '일감 글에 답을 보내면 첫 화면 카톡 칸에 시각과 받은 사람이 남습니다. 못 보냈으면 그 이유가 빨간 글씨로 남습니다.')}
+    </ol>
+  </div>
+
+  <div class="card guide">
+    <h2>카톡 일감 잡기에 문제가 생기면</h2>
+    <dl>
+      <dt>PC의 카톡 일감 도우미가 꺼져 있습니다</dt><dd>카카오톡 PC가 켜져 있는지 보고, 바탕화면의 <b>카톡 일감 도우미</b>를 두 번 눌러 주세요. "지금 켜져 있습니다"가 뜨면 이미 켜져 있는 것입니다.</dd>
+      <dt>채팅방 창이 열려 있지 않습니다</dt><dd>PC 카카오톡에서 그 방을 두 번 눌러 창을 열어 두세요. 방 이름이 설정과 똑같아야 합니다.</dd>
+      <dt>1:1 채팅방을 찾지 못했습니다</dt><dd>그 사람과 대화한 적이 없거나, 카카오톡 창이 '채팅' 탭이 아닌 것입니다. 카카오톡 왼쪽의 말풍선(채팅) 탭을 눌러 두세요.</dd>
+      <dt>글 올린 사람 이름이 화면 밖에 있어 읽지 못했습니다</dt><dd>같은 사람이 글을 여러 개 이어 쓰면 이름이 위로 밀려 보이지 않을 때가 있습니다. 채팅방 창을 세로로 길게 키워 두면 줄어듭니다.</dd>
+      <dt>창을 앞으로 가져오지 못해 보내지 않았습니다</dt><dd>PC가 잠겨 있거나 다른 프로그램이 앞을 막은 것입니다. PC 잠금을 풀어 두세요. 도우미가 켜져 있는 동안에는 화면이 저절로 꺼지지 않습니다.</dd>
+    </dl>
   </div>`;
   for (const id of ['copyExt', 'copyExt2']) document.getElementById(id)?.addEventListener('click', async () => toast((await copyText('chrome://extensions')) ? '복사했습니다. 크롬 주소창에 붙여넣어 주세요.' : '복사가 안 됩니다. 직접 입력해 주세요.'));
+  document.getElementById('copyAgent').onclick = async () => toast((await copyText(AGENT_INSTALL)) ? '복사했습니다. PowerShell 창에 붙여넣어 주세요.' : '복사가 안 됩니다. 명령을 길게 눌러 복사해 주세요.');
+  document.getElementById('toTalk').onclick = () => document.getElementById('talkGuide').scrollIntoView({ behavior: 'smooth' });
 }
 
 // ---------- 시작 ----------
