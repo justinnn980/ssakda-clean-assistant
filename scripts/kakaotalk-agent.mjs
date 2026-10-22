@@ -4,6 +4,7 @@
 //   --setup <서버 주소> <접속 비밀번호>  처음 한 번: 접속해 보고 맞으면 data/talk-agent.json에 저장한다
 // 바탕화면의 '카톡 일감 도우미' 아이콘(scripts/start-kakaotalk-agent.ps1)이 이것을 창 없이 실행한다.
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as kakaotalk from '../lib/kakaotalk.js';
@@ -65,6 +66,8 @@ let applied = '';
 // 방 목록을 마지막으로 읽은 시각과, 읽지 못했을 때의 사유
 let roomsAt = 0;
 let roomsNote = '';
+// 서버가 마지막으로 알려 준 안내(다른 PC가 일하는 중 등)
+let lastNote = '';
 
 // 서버의 설정을 따른다: 켜져 있으면 그 설정으로 지켜보기를 (다시) 시작하고, 꺼져 있으면 멈춘다
 function follow({ kakaoWatch, talk }) {
@@ -85,7 +88,8 @@ while (true) {
   try {
     if (!cookie) cookie = await login(config.server, config.pin);
     // 방 목록은 30초마다 새로 읽어 함께 보낸다(설정 화면에서 고르는 데 쓴다)
-    const body = { ...kakaotalk.status };
+    // 이 PC의 이름도 보낸다(사이트에 보이고, 서버가 도우미를 한 PC에서만 일하게 하는 데 쓴다)
+    const body = { ...kakaotalk.status, pc: os.hostname() };
     if (Date.now() - roomsAt > ROOMS_EVERY) {
       roomsAt = Date.now();
       try {
@@ -104,7 +108,11 @@ while (true) {
       throw new Error('로그인이 풀려 다시 로그인합니다.');
     }
     if (!res.ok) throw new Error(`서버 응답 ${res.status}`);
-    follow(await res.json());
+    const got = await res.json();
+    // 다른 PC의 도우미가 일하는 중이면 그 사유를 한 번만 남긴다
+    if (got.note && got.note !== lastNote) log(got.note);
+    lastNote = got.note || '';
+    follow(got);
   } catch (e) {
     log(`서버 연락 실패: ${e.message}`);
     await sleep(10000);

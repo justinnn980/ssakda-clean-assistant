@@ -80,7 +80,7 @@ const EXT_RUNNER = SERVER_MODE;
 let extStatus = { state: 'off', message: '', lastCheck: null, lastNew: null, account: null, work: '', seenAt: null };
 // 서버에는 카카오톡이 없어서, 카톡 일감 잡기는 카카오톡이 있는 PC의 '카톡 일감 도우미'(scripts/kakaotalk-agent.mjs)가 맡는다.
 // 도우미가 몇 초마다 알려 주는 상태(지켜보기 상태·최근 기록·방 목록)와 마지막으로 연락한 시각
-let talkAgent = { state: 'off', message: '', lastCheck: null, events: [], rooms: [], roomsNote: '', seenAt: null };
+let talkAgent = { pc: '', state: 'off', message: '', lastCheck: null, events: [], rooms: [], roomsNote: '', seenAt: null };
 
 // ---------- 분석 대기열 (한 번에 한 건씩) ----------
 // 앞의 분석이 끝나야 다음 분석이 시작되도록 줄을 세우는 변수. 처음에는 '이미 끝난 일'로 시작한다
@@ -564,11 +564,24 @@ async function handle(req, res) {
     }
   }
 
+  // --- 카톡 일감 도우미 설치 파일: 두 번 누르면 scripts/kakaotalk-setup.ps1을 실행하는 .cmd ---
+  // 한글이 든 PowerShell 내용을 .cmd에 그대로 넣으면 깨져서, PowerShell이 받는 형식(UTF-16을 base64로)으로 바꿔 넣는다
+  if (method === 'GET' && p === '/api/talk/setup.cmd') {
+    const script = (await readFile(path.join(ROOT, 'scripts', 'kakaotalk-setup.ps1'), 'utf8')).replace(/^﻿/, '');
+    const encoded = Buffer.from(script, 'utf16le').toString('base64');
+    const cmd = `@echo off\r\npowershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}\r\necho.\r\npause\r\n`;
+    return send(res, 200, cmd, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="kakaotalk-setup.cmd"' });
+  }
+
   // --- PC 카톡 일감 도우미 (서버에서만) ---
   // 도우미가 몇 초마다 지금 상태와 방 목록을 알려 주고, 켜 두었는지와 방·찾을 말·보낼 글·보낼 곳을 받아 간다
   if (SERVER_MODE && method === 'POST' && p === '/api/talk/agent') {
     const b = await readJson(req, 65536);
     const text = (v, n) => String(v ?? '').slice(0, n);
+    // 도우미는 한 PC에서만 일한다. 두 PC에서 돌면 같은 글에 개인톡이 두 번 나가므로, 30초 안에 연락한 다른 PC가 있으면 이 PC는 쉬게 한다
+    const pc = text(b.pc, 100) || 'PC';
+    const busy = talkAgent.pc && talkAgent.pc !== pc && talkAgent.seenAt && Date.now() - new Date(talkAgent.seenAt) < 30 * 1000;
+    if (busy) return send(res, 200, { kakaoWatch: false, talk: settings.talk, note: `다른 PC(${talkAgent.pc})에서 도우미가 이미 일하고 있어 이 PC는 쉽니다.` });
     const events = (Array.isArray(b.events) ? b.events : []).slice(0, 10).map((e) => ({
       at: text(e?.at, 40), text: text(e?.text, 80), sent: Boolean(e?.sent), note: text(e?.note, 300), to: text(e?.to, 100), ms: Number(e?.ms) || 0,
     }));
@@ -576,6 +589,7 @@ async function handle(req, res) {
       ? b.rooms.slice(0, 100).map((r) => ({ name: text(r?.name, 100), members: Number.isInteger(r?.members) ? r.members : null, open: Boolean(r?.open) })).filter((r) => r.name)
       : talkAgent.rooms;
     talkAgent = {
+      pc,
       state: ['off', 'starting', 'ok', 'error'].includes(b.state) ? b.state : 'error',
       message: text(b.message, 300), lastCheck: b.lastCheck ? text(b.lastCheck, 40) : null, events, rooms,
       roomsNote: typeof b.roomsNote === 'string' ? text(b.roomsNote, 300) : talkAgent.roomsNote, seenAt: new Date().toISOString(),

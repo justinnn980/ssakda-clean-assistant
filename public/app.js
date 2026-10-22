@@ -215,13 +215,13 @@ async function renderList() {
   const talkOn = st.settings.kakaoWatch;
   // 서버에서는 카카오톡이 있는 PC의 '카톡 일감 도우미'가 몇 초마다 연락한다. 30초 넘게 연락이 없으면 도우미나 PC가 꺼진 것이다
   const agentLive = !serverMode || Boolean(tk.seenAt && Date.now() - new Date(tk.seenAt) < 30 * 1000);
-  const agentOff = '<span class="err">PC의 카톡 일감 도우미가 꺼져 있습니다.</span> 카카오톡이 있는 PC에서 바탕화면의 "카톡 일감 도우미"를 켜 주세요. <a href="#/guide">사용 안내</a>';
+  const agentOff = '<span class="err">PC의 카톡 일감 도우미가 꺼져 있습니다.</span> 카카오톡이 있는 PC에서 바탕화면의 "카톡 일감 도우미"를 켜 주세요. <a href="#/guide/talk">사용 안내</a>';
   const talkLine = !talkOn
     ? `<span class="dot"></span>꺼져 있습니다. 카카오톡을 건드리지 않습니다.${agentLive ? '' : `<br>${agentOff}`}`
     : !agentLive
       ? `<span class="dot bad"></span>${agentOff}`
       : tk.state === 'ok'
-        ? `<span class="dot on"></span>${serverMode ? 'PC에서 ' : ''}${esc(tk.message)} · "${esc(st.settings.talk.keyword)}" 글이 오면 ${st.settings.talk.target === 'direct' ? '올린 사람에게 바로 개인톡을 보냅니다.' : '같은 방에 바로 답합니다.'}`
+        ? `<span class="dot on"></span>${serverMode ? (tk.pc ? `PC(${esc(tk.pc)})에서 ` : 'PC에서 ') : ''}${esc(tk.message)} · "${esc(st.settings.talk.keyword)}" 글이 오면 ${st.settings.talk.target === 'direct' ? '올린 사람에게 바로 개인톡을 보냅니다.' : '같은 방에 바로 답합니다.'}`
         : tk.state === 'error'
           ? `<span class="dot bad"></span><span class="err">${esc(tk.message)}</span>`
           : '<span class="dot wait"></span>카카오톡 창을 확인하는 중입니다.';
@@ -729,7 +729,7 @@ async function renderSettings() {
 
   <div class="card" id="talkCard">
     <h2>카톡 일감 잡기</h2>
-    <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. ${serverMode ? '카카오톡이 있는 PC에서 "카톡 일감 도우미"가 켜져 있어야 합니다(<a href="#/guide">사용 안내</a>).' : '노트북의 카카오톡이 켜져 있어야 합니다.'} 보내는 몇 초 동안은 카카오톡 창이 앞으로 나오고 마우스가 저절로 움직일 수 있습니다. 개인톡은 글 올린 사람의 프로필에서 1:1 채팅을 열어 보냅니다. 오픈채팅방에서는 프로필로 대화를 걸 수 없어서, 그 사람과 이미 만들어 둔 1:1 채팅방이 있을 때만 그 방으로 보냅니다. 윈도우 PC는 지켜볼 방 창을 열어 두어야 합니다(최소화하지 말고). 저장하면 바로 적용됩니다.</p>
+    <p class="muted">첫 화면에서 켜 두면, 아래 방에 "찾을 말"이 든 새 글이 올라오는 즉시 "보낼 글"을 보냅니다. ${serverMode ? '카카오톡이 있는 PC에서 "카톡 일감 도우미"가 켜져 있어야 합니다(<a href="#/guide/talk">사용 안내</a>).' : '노트북의 카카오톡이 켜져 있어야 합니다.'} 보내는 몇 초 동안은 카카오톡 창이 앞으로 나오고 마우스가 저절로 움직일 수 있습니다. 개인톡은 글 올린 사람의 프로필에서 1:1 채팅을 열어 보냅니다. 오픈채팅방에서는 프로필로 대화를 걸 수 없어서, 그 사람과 이미 만들어 둔 1:1 채팅방이 있을 때만 그 방으로 보냅니다. 윈도우 PC는 지켜볼 방 창을 열어 두어야 합니다(최소화하지 말고). 저장하면 바로 적용됩니다.</p>
     <label>지켜볼 채팅방</label>
     <input id="talkRoom" list="talkRooms" value="${esc(st.settings.talk.room)}" placeholder="카카오톡에 보이는 방 이름 그대로" autocomplete="off">
     <datalist id="talkRooms"></datalist>
@@ -853,32 +853,112 @@ async function renderSettings() {
   if (waiting) pollTimer = setInterval(() => location.hash === '#/settings' && !document.querySelector('.switch input:disabled') && renderSettings(), 4000);
 }
 
-// 카톡 일감 도우미를 카카오톡 PC에 설치하는 PowerShell 명령 한 줄: Node.js·Git 설치 → 프로그램 받기(있으면 최신으로) → 설치 스크립트
+// 카톡 일감 도우미 설치 파일이 안 될 때 쓰는 PowerShell 명령 한 줄(설치 파일과 같은 일을 한다)
 const AGENT_INSTALL =
   "winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements; winget install -e --id Git.Git --accept-source-agreements --accept-package-agreements; $env:Path=[Environment]::GetEnvironmentVariable('Path','Machine')+';'+[Environment]::GetEnvironmentVariable('Path','User'); cd ~; if (Test-Path ssakda-clean-assistant) { git -C ssakda-clean-assistant pull --ff-only } else { git clone https://github.com/justinnn980/ssakda-clean-assistant.git }; powershell -ExecutionPolicy Bypass -File ssakda-clean-assistant/scripts/install-kakaotalk-agent.ps1";
 
 // ---------- 사용 안내 (서버에서 돌 때) ----------
-// PC 크롬 확장을 설치하고 쓰는 방법. 영상 두 편(처음 설치하기, 매일 쓰는 법)과 단계마다 실제 화면 사진을 보여준다.
-// 웹스토어 주소(extStore)가 있으면 설치는 '웹스토어에서 추가하기' 한 번으로 바뀐다. 이 브라우저에 확장이 있는지도 맨 위에 보여준다
-function renderGuide() {
+// 두 가지를 안내한다: 숨고 채팅 자동 응대(PC 크롬 확장)와 카톡 일감 잡기(카카오톡 PC의 도우미). 맨 위에서 하나를 골라 그 안내만 보여 준다.
+// 숨고: 영상 두 편과 단계마다 실제 화면 사진. 웹스토어 주소(extStore)가 있으면 설치는 '웹스토어에서 추가하기' 한 번으로 바뀐다.
+// 카톡: 설치 파일 받기(/api/talk/setup.cmd) → 두 번 누르기 → 비밀번호. 맨 위에 도우미가 지금 연결돼 있는지와 PC 이름을 보여 준다
+let guideTab = 'soomgo';
+async function renderGuide() {
   clearInterval(pollTimer);
-  const ext = extVersion();
-  const extState = !ext
-    ? '<span class="dot wait"></span>이 브라우저에는 확장이 아직 없습니다. 아래 "처음 한 번: 확장 설치"를 따라 해 주세요.'
-    : extLatest && ext !== extLatest
-      ? `<span class="dot bad"></span>확장이 설치되어 있지만 옛 버전(${esc(ext)})입니다. 아래 "확장 업데이트"를 따라 해 주세요.`
-      : `<span class="dot on"></span>이 브라우저에 확장이 설치되어 있습니다(버전 ${esc(ext)}).`;
+  const st = await api('/api/state');
   // 단계 하나: 번호, 제목, 설명, 사진(누르면 크게)
   const step = (n, title, text, shot) => `<li class="step"><span class="num">${n}</span><div><b>${title}</b>${text ? `<p>${text}</p>` : ''}${
     shot ? `<a href="/guide/${shot}" target="_blank"><img class="shot" src="/guide/${shot}" alt="${title}" loading="lazy"></a>` : ''}</div></li>`;
   const video = (name, title) => `<div class="video"><b>${title}</b><video controls preload="none" playsinline poster="/guide/${name}-poster.jpg" src="/guide/${name}.mp4"></video></div>`;
-  const install = extStore
-    ? `<ol class="steps">
+  const tabs = `<div class="tabs">${[['soomgo', '숨고 채팅 자동 응대'], ['talk', '카톡 일감 잡기']]
+    .map(([k, v]) => `<button class="tab ${k === guideTab ? 'on' : ''}" data-g="${k}">${v}</button>`)
+    .join('')}</div>`;
+
+  let body;
+  if (guideTab === 'talk') {
+    // 도우미가 30초 안에 연락했으면 연결된 것이다
+    const tk = st.talk;
+    const live = tk.seenAt && Date.now() - new Date(tk.seenAt) < 30 * 1000;
+    const agentState = live
+      ? `<span class="dot on"></span>카톡 일감 도우미가 연결되어 있습니다${tk.pc ? ` (PC 이름: ${esc(tk.pc)})` : ''}. 설치는 끝났으니 아래 "쓰는 법"으로 가세요.`
+      : '<span class="dot wait"></span>카톡 일감 도우미가 연결되어 있지 않습니다. 처음이면 아래 "처음 한 번: 도우미 설치"를, 설치했다면 그 PC의 바탕화면에서 <b>카톡 일감 도우미</b>를 두 번 눌러 주세요.';
+    body = `
+  <div class="card guide">
+    <h2>카톡 일감 잡기</h2>
+    <div class="state-line">${agentState}</div>
+    <ul>
+      <li>업무 단체방에 <b>찾을 말</b>(예: [방문견적])이 든 글이 올라오면, <b>글 올린 사람에게 개인톡</b>으로 정해 둔 글을 몇 초 안에 보냅니다.</li>
+      <li>이 사이트(서버)에는 카카오톡이 없어서, <b>사장님 카카오톡이 로그인된 윈도우 PC</b>에 <b>카톡 일감 도우미</b>를 한 번 설치해 둡니다. 그 뒤로는 휴대폰에서도 이 사이트로 켜고 끕니다.</li>
+      <li>그 PC와 카카오톡이 켜져 있어야 동작합니다. 도우미는 PC를 켤 때 저절로 켜집니다.</li>
+    </ul>
+  </div>
+
+  <div class="card guide">
+    <h2>처음 한 번: 도우미 설치</h2>
+    <p class="muted">반드시 <b>사장님 카카오톡이 로그인된 윈도우 PC</b>에서 합니다. 도우미는 한 PC에만 설치하세요(두 PC에 있으면 먼저 켜진 PC만 일합니다).</p>
+    <ol class="steps">
+      ${step(1, '그 PC의 크롬에서 이 사이트 열기', '카카오톡이 있는 PC에서 크롬을 열고 이 사이트에 접속해, 지금 보고 있는 <b>안내 → 카톡 일감 잡기</b>를 엽니다.')}
+      ${step(2, '설치 파일 받기', '아래 버튼을 누르면 <b>kakaotalk-setup.cmd</b> 파일이 받아집니다. 크롬이 "흔하지 않은 파일" 같은 경고를 띄우면 <b>계속</b>(또는 <b>유지</b>)을 누릅니다.<p><a class="btn primary" href="/api/talk/setup.cmd">설치 파일 받기</a></p>')}
+      ${step(3, '받은 파일 두 번 누르기', '크롬 오른쪽 위의 다운로드 표시(↓)를 누르고 <b>kakaotalk-setup.cmd</b>를 누릅니다. 다운로드 폴더에서 두 번 눌러도 됩니다.')}
+      ${step(4, '파란 "Windows의 PC 보호" 창이 뜨면', '<b>추가 정보</b>를 누른 뒤 아래에 생기는 <b>실행</b>을 누릅니다. (인터넷에서 받은 파일이라 처음 한 번 묻는 것입니다.)')}
+      ${step(5, '검은 창에서 설치가 진행됩니다', '몇 분 걸립니다. 중간에 <b>"이 앱이 디바이스를 변경할 수 있도록 허용하시겠어요?"</b> 창이 뜨면 <b>예</b>를 누릅니다(한두 번). 창은 닫지 말고 기다려 주세요.')}
+      ${step(6, '접속 비밀번호 넣기', '작은 창이 뜨면 <b>이 사이트의 접속 비밀번호</b>를 넣고 확인을 누릅니다. "켜졌습니다"가 뜨면 확인을 누르고, 검은 창은 아무 키나 눌러 닫습니다.')}
+      ${step(7, '연결 확인', '이 화면을 새로고침해서 맨 위에 <b>"카톡 일감 도우미가 연결되어 있습니다"</b>가 보이면 설치 끝입니다. 바탕화면에 <b>카톡 일감 도우미</b> 아이콘이 생깁니다.')}
+    </ol>
+    <details><summary class="muted">설치 파일이 안 될 때 (도와줄 분께 보여 주세요)</summary>
+      <p class="muted">윈도우 키 → <b>powershell</b> 입력 → Enter로 창을 연 뒤, 아래 명령을 붙여넣고 Enter를 누릅니다. 설치 파일과 같은 일을 합니다.</p>
+      <p><code>${esc(AGENT_INSTALL)}</code></p>
+      <p><button class="btn small" id="copyAgent">명령 복사</button></p>
+    </details>
+  </div>
+
+  <div class="card guide">
+    <h2>쓰는 법</h2>
+    <ol class="steps">
+      ${step(1, '지켜볼 방 창 열어 두기', 'PC 카카오톡에서 업무 단체방을 두 번 눌러 <b>채팅방 창</b>을 엽니다. 이 창은 <b>닫거나 최소화하지 말고</b> 다른 창 뒤에 두세요. 세로로 길게 키워 두면 더 정확합니다.')}
+      ${step(2, '설정 정하기', '이 사이트 <b>설정 → 카톡 일감 잡기</b>에서 <b>지켜볼 채팅방</b>(칸을 누르면 PC에 열린 방이 나옵니다), <b>찾을 말</b>, <b>보낼 글</b>을 정하고, <b>보낼 곳</b>은 <b>글 올린 사람에게 개인톡</b>으로 두고 <b>저장</b>을 누릅니다.')}
+      ${step(3, '켜기', '첫 화면의 <b>카톡 일감 잡기</b>에서 <b>켜기</b>를 누릅니다. 몇 초 뒤 <b>PC(이름)에서 "방 이름" 방을 지켜보는 중</b>이 보이면 됩니다.')}
+      ${step(4, '보낸 기록 보기', '일감 글이 올라와 개인톡을 보내면 첫 화면 카톡 칸에 시각과 받은 사람이 남습니다. 못 보냈으면 이유가 빨간 글씨로 남습니다.')}
+      ${step(5, '끄기', '첫 화면에서 <b>끄기</b>를 누르면 바로 멈춥니다. 도우미는 켜 둔 채로 두어도 됩니다.')}
+    </ol>
+    <p class="muted">처음 한 번은 보낼 곳을 <b>같은 방에 답하기 (시험용)</b>로 두고, 카카오톡의 <b>나와의 채팅</b> 방을 지켜볼 방으로 정해 찾을 말이 든 글을 직접 써 보면 안전하게 시험할 수 있습니다.</p>
+  </div>
+
+  <div class="card guide">
+    <h2>이렇게 보냅니다</h2>
+    <ul>
+      <li>글 옆의 <b>프로필 사진을 눌러 1:1 채팅</b>을 열고 보냅니다. 처음 대화하는 사람에게도 보냅니다.</li>
+      <li><b>오픈채팅방</b>은 카카오톡이 프로필로 대화를 걸지 못하게 해서, 그 사람과 <b>이미 대화한 1:1 채팅방</b>이 있을 때만 보냅니다.</li>
+      <li>보내는 몇 초 동안 카카오톡 창이 앞으로 나오고 마우스가 저절로 움직입니다. 그동안 PC를 만지지 않는 것이 좋습니다.</li>
+      <li>내가 쓴 글에는 보내지 않고, 같은 사람의 같은 글에는 10분 안에 두 번 보내지 않습니다.</li>
+    </ul>
+  </div>
+
+  <div class="card guide">
+    <h2>문제가 생기면</h2>
+    <dl>
+      <dt>PC의 카톡 일감 도우미가 꺼져 있습니다</dt><dd>카카오톡 PC가 켜져 있는지 보고, 그 PC 바탕화면의 <b>카톡 일감 도우미</b>를 두 번 눌러 주세요. "지금 켜져 있습니다"가 뜨면 이미 켜져 있는 것입니다.</dd>
+      <dt>채팅방 창이 열려 있지 않습니다</dt><dd>PC 카카오톡에서 그 방을 두 번 눌러 창을 열어 두세요. 최소화돼 있으면 안 됩니다.</dd>
+      <dt>프로필 창에 "1:1 채팅" 버튼이 없습니다 / 1:1 채팅방을 찾지 못했습니다</dt><dd>오픈채팅방이라 프로필로 대화를 걸 수 없고, 그 사람과 대화한 1:1 채팅방도 없는 것입니다. 카카오톡 메인 창은 왼쪽 말풍선(채팅) 탭으로 두세요.</dd>
+      <dt>화면 밖에 있어 프로필을 누르지 못했습니다 / 이름을 읽지 못했습니다</dt><dd>글이 한꺼번에 많이 올라와 위로 밀린 것입니다. 채팅방 창을 세로로 길게 키워 두세요.</dd>
+      <dt>창을 앞으로 가져오지 못해 보내지 않았습니다</dt><dd>PC가 잠겨 있었던 것입니다. 잠금을 풀어 두세요. 도우미가 지켜보는 동안에는 화면이 저절로 꺼지지 않습니다.</dd>
+      <dt>다른 PC에서 도우미가 이미 일하고 있습니다</dt><dd>도우미가 두 PC에 설치되어 있습니다. 쓰지 않을 PC에서 바탕화면 아이콘을 두 번 눌러 <b>아니요(도우미 끄기)</b>를 누르고, 바탕화면과 시작 프로그램의 <b>카톡 일감 도우미</b>를 지워 주세요.</dd>
+      <dt>도우미를 끄거나 다시 켜려면</dt><dd>바탕화면 <b>카톡 일감 도우미</b>를 두 번 누릅니다. 켜져 있으면 [예] 사이트 열기 · [아니요] 끄기를 고를 수 있습니다. 켤 때마다 저절로 최신 버전을 받아 옵니다.</dd>
+    </dl>
+  </div>`;
+  } else {
+    const ext = extVersion();
+    const extState = !ext
+      ? '<span class="dot wait"></span>이 브라우저에는 확장이 아직 없습니다. 아래 "처음 한 번: 확장 설치"를 따라 해 주세요.'
+      : extLatest && ext !== extLatest
+        ? `<span class="dot bad"></span>확장이 설치되어 있지만 옛 버전(${esc(ext)})입니다. 아래 "확장 업데이트"를 따라 해 주세요.`
+        : `<span class="dot on"></span>이 브라우저에 확장이 설치되어 있습니다(버전 ${esc(ext)}).`;
+    const install = extStore
+      ? `<ol class="steps">
         ${step(1, '아래 버튼을 누릅니다', '크롬 웹스토어의 싹다클린 AI 비서 페이지가 열립니다. 예전에 파일로 설치한 확장이 있으면 chrome://extensions 에서 먼저 <b>삭제</b>해 주세요.<p><a class="btn primary" href="${esc(extStore)}" target="_blank">크롬 웹스토어에서 확장 추가하기</a></p>')}
         ${step(2, '"Chrome에 추가"를 누릅니다', '확인 창이 뜨면 "확장 프로그램 추가"를 누릅니다. 끝입니다. 다음부터는 저절로 업데이트됩니다.')}
         ${step(3, '이 사이트를 새로고침합니다', '맨 위에 "설치되어 있습니다"가 보이면 됩니다.', '7-site-ok.jpg')}
       </ol>`
-    : `<ol class="steps">
+      : `<ol class="steps">
         ${step(1, '확장 파일 받기', '아래 버튼을 누르면 <b>ssakda-extension.zip</b> 파일이 다운로드 폴더에 받아집니다.<p><a class="btn primary" href="/api/extension.zip">확장 파일 받기</a></p>', '1-download.jpg')}
         ${step(2, '압축 풀기', '받은 파일을 <b>마우스 오른쪽 버튼</b>으로 누르고 <b>모두 압축 풀기...</b> → <b>압축 풀기</b>를 누릅니다. 같은 이름의 폴더가 생깁니다. 이 폴더는 <b>지우지 마세요</b>.', '2-unzip.jpg')}
         ${step(3, '크롬 확장 화면을 열고 개발자 모드 켜기', `크롬 주소창에 아래 주소를 붙여넣고 Enter를 누른 뒤, 오른쪽 위의 <b>개발자 모드</b>를 켭니다.<p><code>chrome://extensions</code> <button class="btn small" id="copyExt">주소 복사</button></p>`, '3-devmode.jpg')}
@@ -888,11 +968,10 @@ function renderGuide() {
         ${step(7, '이 사이트를 새로고침', '맨 위에 "설치되어 있습니다"가 보이면 됩니다.', '7-site-ok.jpg')}
       </ol>
       <p class="muted">어려우면 이 화면을 설치를 도와줄 분께 보여 주세요. 처음 한 번만 하면 됩니다.</p>`;
-  app.innerHTML = `
+    body = `
   <div class="card guide">
-    <h2>사용 안내</h2>
+    <h2>숨고 채팅 자동 응대</h2>
     <div class="state-line">${extState}</div>
-    <p><button class="btn small" id="toTalk">카톡 일감 잡기 안내 보기</button></p>
   </div>
 
   <div class="card guide">
@@ -951,55 +1030,19 @@ function renderGuide() {
       ${step(5, '이 사이트를 새로고침', '맨 위에 "설치되어 있습니다"가 보이면 끝입니다.', '7-site-ok.jpg')}
     </ol>`}
     <p class="muted"><a href="/privacy.html" target="_blank">개인정보 처리방침</a></p>
-  </div>
-
-  <div class="card guide" id="talkGuide">
-    <h2>카톡 일감 잡기</h2>
-    <ul>
-      <li>업무 단체방에 <b>찾을 말</b>(예: [방문견적])이 든 새 글이 올라오면, 올린 사람에게 정해 둔 글을 바로 개인톡으로 보냅니다. AI를 거치지 않아 몇 초 안에 보냅니다.</li>
-      <li>이 서버에는 카카오톡이 없어서, <b>카카오톡이 있는 윈도우 PC</b>에 <b>카톡 일감 도우미</b>를 한 번 설치해 둡니다. 켜기·끄기와 설정은 이 사이트(휴대폰도 됨)에서 하고, 도우미가 몇 초 안에 받아 PC 카카오톡을 지켜봅니다.</li>
-      <li>윈도우 카카오톡은 채팅 글을 프로그램에 알려 주지 않아서, 채팅방 창을 화면처럼 찍어 글자를 읽습니다. 그래서 지켜볼 방 창을 <b>열어 두어야</b> 합니다. 다른 창 뒤에 있어도 되지만 <b>최소화하면 안 됩니다</b>.</li>
-      <li>개인톡은 글 옆의 <b>프로필 사진을 눌러 1:1 채팅</b>을 열고 보냅니다. 처음 대화하는 사람에게도 보냅니다. 단, <b>오픈채팅방</b>은 카카오톡이 프로필로 대화를 걸지 못하게 해서 그 사람과 <b>이미 만들어 둔 1:1 채팅방</b>이 있을 때만 보냅니다.</li>
-      <li>같은 사람의 같은 글에는 10분 안에 두 번 보내지 않습니다.</li>
-      <li>보낼 때는 카카오톡 창이 잠깐 앞으로 나오고 마우스가 저절로 움직일 수 있습니다. 그동안 PC를 만지지 않는 것이 좋습니다.</li>
-    </ul>
-  </div>
-
-  <div class="card guide">
-    <h2>처음 한 번: 카톡 일감 도우미 설치 (카카오톡 PC에서)</h2>
-    <ol class="steps">
-      ${step(1, 'PC 카카오톡에 업무방 계정으로 로그인', '카카오톡 PC 로그인은 한 대만 됩니다. 다른 PC에서 같은 계정으로 쓰고 있으면 그쪽이 로그아웃됩니다.')}
-      ${step(2, 'PowerShell 열기', '키보드의 <b>윈도우 키</b>를 누르고 <b>powershell</b>이라고 친 뒤 Enter를 누릅니다. 파란(또는 검은) 창이 열립니다.')}
-      ${step(3, '아래 명령을 붙여넣고 Enter', `필요한 프로그램(Node.js, Git)을 설치하고, 비서 프로그램을 받아, 바탕화면에 <b>카톡 일감 도우미</b> 아이콘을 만듭니다. 몇 분 걸립니다. 창 안에서 마우스 오른쪽 버튼을 누르면 붙여넣어집니다.<p><code>${esc(AGENT_INSTALL)}</code></p><p><button class="btn small" id="copyAgent">명령 복사</button></p>`)}
-      ${step(4, '접속 비밀번호 넣기', '마지막에 작은 창이 뜨면 이 사이트의 <b>접속 비밀번호</b>를 넣고 확인을 누릅니다. "켜졌습니다"가 뜨면 설치 끝입니다. 다음부터는 PC를 켤 때 저절로 켜집니다.')}
-    </ol>
-    <p class="muted">어려우면 이 화면을 설치를 도와줄 분께 보여 주세요. 처음 한 번만 하면 됩니다.</p>
-  </div>
-
-  <div class="card guide">
-    <h2>카톡 일감 잡기 쓰는 법</h2>
-    <ol class="steps">
-      ${step(1, '지켜볼 방 열어 두기', 'PC 카카오톡에서 업무 단체방을 두 번 눌러 <b>채팅방 창</b>을 엽니다. 창은 닫거나 최소화하지 말고 다른 창 뒤에 두세요. 창을 세로로 길게 두면 글 올린 사람 이름과 프로필 사진이 잘 보여 더 정확합니다.')}
-      ${step(2, '설정 정하기', '이 사이트의 <b>설정 → 카톡 일감 잡기</b>에서 <b>지켜볼 채팅방</b>(칸을 누르면 PC에 열린 방이 나옵니다), <b>찾을 말</b>, <b>보낼 글</b>, <b>보낼 곳</b>을 정하고 <b>저장</b>을 누릅니다. 처음에는 보낼 곳을 "같은 방에 답하기 (시험용)"로 두고 "나와의 채팅" 방으로 시험해 보면 안전합니다.')}
-      ${step(3, '켜기', '첫 화면의 <b>카톡 일감 잡기</b>에서 <b>켜기</b>를 누릅니다. 몇 초 뒤 <b>PC에서 "방 이름" 방을 지켜보는 중</b>이 보이면 잘 되고 있는 것입니다.')}
-      ${step(4, '보낸 기록 보기', '일감 글에 답을 보내면 첫 화면 카톡 칸에 시각과 받은 사람이 남습니다. 못 보냈으면 그 이유가 빨간 글씨로 남습니다.')}
-    </ol>
-  </div>
-
-  <div class="card guide">
-    <h2>카톡 일감 잡기에 문제가 생기면</h2>
-    <dl>
-      <dt>PC의 카톡 일감 도우미가 꺼져 있습니다</dt><dd>카카오톡 PC가 켜져 있는지 보고, 바탕화면의 <b>카톡 일감 도우미</b>를 두 번 눌러 주세요. "지금 켜져 있습니다"가 뜨면 이미 켜져 있는 것입니다.</dd>
-      <dt>채팅방 창이 열려 있지 않습니다</dt><dd>PC 카카오톡에서 그 방을 두 번 눌러 창을 열어 두세요. 방 이름이 설정과 똑같아야 합니다.</dd>
-      <dt>프로필 창에 "1:1 채팅" 버튼이 없습니다 / 1:1 채팅방을 찾지 못했습니다</dt><dd>오픈채팅방이라 프로필로 대화를 걸 수 없고, 그 사람과 만들어 둔 1:1 채팅방도 없는 것입니다. 그 사람과 한 번 대화를 열어 두면 다음부터 보냅니다. 카카오톡 메인 창은 왼쪽의 말풍선(채팅) 탭으로 두세요.</dd>
-      <dt>일감 글이 채팅방 화면 밖에 있어 프로필을 누르지 못했습니다</dt><dd>글이 한꺼번에 많이 올라와 프로필 사진이 위로 밀린 것입니다. 채팅방 창을 세로로 길게 키워 두세요.</dd>
-      <dt>글 올린 사람 이름이 화면 밖에 있어 읽지 못했습니다</dt><dd>같은 사람이 글을 여러 개 이어 쓰면 이름이 위로 밀려 보이지 않을 때가 있습니다. 채팅방 창을 세로로 길게 키워 두면 줄어듭니다.</dd>
-      <dt>창을 앞으로 가져오지 못해 보내지 않았습니다</dt><dd>PC가 잠겨 있거나 다른 프로그램이 앞을 막은 것입니다. PC 잠금을 풀어 두세요. 도우미가 켜져 있는 동안에는 화면이 저절로 꺼지지 않습니다.</dd>
-    </dl>
   </div>`;
+  }
+
+  app.innerHTML = `
+  <div class="card guide">
+    <h2>사용 안내</h2>
+    <p class="muted">무엇을 볼지 고르세요.</p>
+    ${tabs}
+  </div>${body}`;
+  // 위의 탭을 누르면 그 안내로 바꿔 다시 그린다
+  app.querySelectorAll('[data-g]').forEach((b) => (b.onclick = () => ((guideTab = b.dataset.g), renderGuide())));
   for (const id of ['copyExt', 'copyExt2']) document.getElementById(id)?.addEventListener('click', async () => toast((await copyText('chrome://extensions')) ? '복사했습니다. 크롬 주소창에 붙여넣어 주세요.' : '복사가 안 됩니다. 직접 입력해 주세요.'));
-  document.getElementById('copyAgent').onclick = async () => toast((await copyText(AGENT_INSTALL)) ? '복사했습니다. PowerShell 창에 붙여넣어 주세요.' : '복사가 안 됩니다. 명령을 길게 눌러 복사해 주세요.');
-  document.getElementById('toTalk').onclick = () => document.getElementById('talkGuide').scrollIntoView({ behavior: 'smooth' });
+  document.getElementById('copyAgent')?.addEventListener('click', async () => toast((await copyText(AGENT_INSTALL)) ? '복사했습니다. PowerShell 창에 붙여넣어 주세요.' : '복사가 안 됩니다. 명령을 길게 눌러 복사해 주세요.'));
 }
 
 // ---------- 시작 ----------
@@ -1012,7 +1055,11 @@ async function route() {
     if (h.startsWith('#/i/')) await renderDetail(h.slice(4));
     else if (h === '#/new') renderNew();
     else if (h === '#/settings') await renderSettings();
-    else if (h === '#/guide') renderGuide();
+    else if (h.startsWith('#/guide')) {
+      // #/guide/talk로 오면 카톡 일감 잡기 안내를 연다
+      if (h === '#/guide/talk') guideTab = 'talk';
+      await renderGuide();
+    }
     else await renderList();
     // 화면 맨 위로 올리고, 바로 보여줄 칸이 정해져 있으면 그 칸으로 내려간다
     window.scrollTo(0, 0);
